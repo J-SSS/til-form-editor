@@ -4,11 +4,12 @@ interface LayoutIndexProps {
   onContextMenu: (e: React.MouseEvent) => void;
   header: React.ReactNode;
   lnb: React.ReactNode;
+  mainTop?: React.ReactNode;
   main: React.ReactNode;
   rnb: React.ReactNode;
 }
 
-const LayoutIndex: React.FC<LayoutIndexProps> = ({ onContextMenu, header, lnb, main, rnb }) => {
+const LayoutIndex: React.FC<LayoutIndexProps> = ({ onContextMenu, header, lnb, mainTop, main, rnb }) => {
   return (
     <>
       {header}
@@ -16,7 +17,10 @@ const LayoutIndex: React.FC<LayoutIndexProps> = ({ onContextMenu, header, lnb, m
         <div className="spreadsheet-side-panel" aria-label="button-placeholder">
           {lnb}
         </div>
-        {main}
+        <div className="spreadsheet-center-panel">
+          {mainTop}
+          {main}
+        </div>
         <div className="spreadsheet-right-panel" aria-label="button-placeholder-right">
           {rnb}
         </div>

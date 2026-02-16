@@ -14,8 +14,103 @@ const DEFAULT_ROW_HEIGHT = 25;
 const INITIAL_ROWS = 3;
 const INITIAL_COLS = 3;
 const MIN_COL_WIDTH = 50;
+const ELEMENT_TOKEN_TEXT_REGEX = /\[\[[^[\]]+\]\]/g;
 
-// ??媛쒖닔??留욎떠 ?꾩껜 1024px瑜?洹좊벑 遺꾨같?쒕떎.
+const stripElementTokens = (value: string) => value.replace(ELEMENT_TOKEN_TEXT_REGEX, '').trim();
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+const plainTextToHtml = (value: string) => escapeHtml(value).replace(/\n/g, '<br />');
+const htmlToPlainText = (value: string) =>
+  value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+
+const toElementHtml = (el: NonNullable<Cell['elements']>[number]) => {
+  const displayLabel = escapeHtml(el.label || el.name || '');
+  const placeholderText = escapeHtml(el.placeholder || el.label || '');
+  const placeholderAttr = placeholderText ? ` placeholder="${placeholderText}"` : '';
+  let control = `<span class="cell-native-label">${escapeHtml(el.type)}</span>`;
+  if (el.type === 'text') control = `<input class="cell-native-control" type="text"${placeholderAttr} readonly tabindex="-1" />`;
+  else if (el.type === 'textarea') control = `<textarea class="cell-native-control" readonly tabindex="-1"${placeholderAttr}></textarea>`;
+  else if (el.type === 'number') control = `<input class="cell-native-control" type="number"${placeholderAttr} readonly tabindex="-1" />`;
+  else if (el.type === 'select') control = `<select class="cell-native-control" disabled tabindex="-1"><option>${displayLabel || '선택'}</option></select>`;
+  else if (el.type === 'checkbox') control = `<label class="cell-native-check"><input type="checkbox" disabled tabindex="-1" /><span>${displayLabel || '체크 박스'}</span></label>`;
+  else if (el.type === 'radio') control = `<label class="cell-native-check"><input type="radio" disabled tabindex="-1" /><span>${displayLabel || '라디오 버튼'}</span></label>`;
+  else if (el.type === 'label') control = `<span class="cell-native-label">${displayLabel || '라벨'}</span>`;
+  else if (el.type === 'url') control = `<a class="cell-native-link" href="#" tabindex="-1">${displayLabel || 'URL'}</a>`;
+  else if (el.type === 'image') control = `<span class="cell-native-image">이미지</span>`;
+  else if (el.type === 'button' || el.type === 'repeat-button') control = `<button type="button" class="cell-native-control" disabled tabindex="-1">${displayLabel || '버튼'}</button>`;
+  else if (el.type === 'user-select' || el.type === 'department-select') control = `<select class="cell-native-control" disabled tabindex="-1"><option>${displayLabel || '선택'}</option></select>`;
+  else if (el.type === 'file-upload') control = `<span class="cell-native-label">${displayLabel || '파일 업로드'}</span>`;
+  else if (el.type === 'repeat-list-number') control = `<span class="cell-native-label">1.</span>`;
+  return `<span class="cell-element-node" contenteditable="false" data-element-id="${el.id}" data-element-label="${escapeHtml(el.label)}">${control}</span>`;
+};
+
+const buildDefaultRichTextHtml = (cell: Cell) => {
+  const safeText = plainTextToHtml(stripElementTokens(cell.value || ''));
+  const elementHtml = (cell.elements || [])
+    .map((el) => toElementHtml(el))
+    .join(' ');
+  if (safeText && elementHtml) return `${safeText} ${elementHtml}`;
+  return safeText || elementHtml || '';
+};
+
+const parseRichEditorPayload = (html: string, elements: NonNullable<Cell['elements']>) => {
+  const container = document.createElement('div');
+  container.innerHTML = html || '';
+
+  const ids: string[] = [];
+  container.querySelectorAll<HTMLElement>('[data-element-id]').forEach((node) => {
+    const id = node.dataset.elementId;
+    if (id) ids.push(id);
+  });
+
+  const byId = new Map(elements.map((el) => [el.id, el]));
+  const nextElements: NonNullable<Cell['elements']> = [];
+  ids.forEach((id) => {
+    const found = byId.get(id);
+    if (found) nextElements.push(found);
+  });
+
+  const textOnly = container.cloneNode(true) as HTMLElement;
+  textOnly.querySelectorAll('[data-element-id]').forEach((node) => node.remove());
+  const plain = stripElementTokens(htmlToPlainText(textOnly.innerHTML || textOnly.textContent || ''));
+
+  return { plain, html: container.innerHTML, elements: nextElements };
+};
+
+const syncElementNodesInHtml = (html: string, elements: NonNullable<Cell['elements']>) => {
+  const container = document.createElement('div');
+  container.innerHTML = html || '';
+  const byId = new Map(elements.map((el) => [el.id, el]));
+  container.querySelectorAll<HTMLElement>('[data-element-id]').forEach((node) => {
+    const id = node.dataset.elementId;
+    if (!id) return;
+    const element = byId.get(id);
+    if (!element) {
+      node.remove();
+      return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = toElementHtml(element);
+    const next = wrapper.firstElementChild;
+    if (next) node.replaceWith(next);
+  });
+  return container.innerHTML;
+};
+
+// 열 개수에 맞춰 전체 1024px를 균등 분배합니다.
 const computeDistributedWidths = (count: number) => {
   const safe = Math.max(1, count);
   const base = Math.floor(GRID_CELL_WIDTH / safe);
@@ -23,15 +118,17 @@ const computeDistributedWidths = (count: number) => {
   return Array.from({ length: safe }, (_, i) => base + (i < rem ? 1 : 0));
 };
 
-// ?섎━癒쇳듃 湲곕낯媛믪뿉 遺숈씪 ?꾩옱 ?쒓컖 ?좏겙(YYYYMMDDHHmmss)??留뚮뱺??
+// 엘리먼트 기본값에 붙일 현재 시각 토큰(YYYYMMDDHHmmss)을 생성합니다.
 const formatCurrentTimeToken = () => {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 };
 
+type LnbTabKey = '기본 설정' | '자동 입력' | '선택 입력' | '커스텀 항목';
+
 const SpreadsheetEditor: React.FC = () => {
-  // ?쒗듃 ?듭떖 ?곹깭: ? ?곗씠?곗? ?덉씠?꾩썐(???믪씠/???덈퉬), ?좏깮/?몄쭛 ?곹깭瑜?愿由ы븳??
+  // 시트 편집 상태: 셀 데이터와 레이아웃(행 높이/열 너비), 선택/편집 상태를 관리합니다.
   const [cells, setCells] = useState<Cell[][]>(() =>
     Array.from({ length: INITIAL_ROWS }, (_, row) =>
       Array.from({ length: INITIAL_COLS }, (_, col) => ({
@@ -41,6 +138,7 @@ const SpreadsheetEditor: React.FC = () => {
         colSpan: 1,
         isMerged: false,
         background: undefined,
+        richTextHtml: '',
         elements: [],
       }))
     )
@@ -57,11 +155,17 @@ const SpreadsheetEditor: React.FC = () => {
   const [isShortcutOpen, setIsShortcutOpen] = useState(false);
   const [isDocOpen, setIsDocOpen] = useState(false);
   const [isElementModalOpen, setIsElementModalOpen] = useState(false);
+  const [isAddTabModalOpen, setIsAddTabModalOpen] = useState(false);
+  const [isTabEditModalOpen, setIsTabEditModalOpen] = useState(false);
+  const [isTabDeleteConfirmOpen, setIsTabDeleteConfirmOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeMainTab, setActiveMainTab] = useState<'sheet'>('sheet');
+  const [mainTabLabel, setMainTabLabel] = useState('본문');
+  const [mainTabLabelDraft, setMainTabLabelDraft] = useState('본문');
   const [colorMenu, setColorMenu] = useState<{ x: number; y: number } | null>(null);
   const [headerContextMenu, setHeaderContextMenu] = useState<HeaderContextMenuState | null>(null);
   const [inspectedElement, setInspectedElement] = useState<InspectedElement | null>(null);
-  const [lnbTab, setLnbTab] = useState<'선택' | '자동'>('선택');
+  const [lnbTab, setLnbTab] = useState<LnbTabKey>('기본 설정');
   const [rnbOpenSections, setRnbOpenSections] = useState({
     propertiesMain: true,
     events: true,
@@ -69,7 +173,7 @@ const SpreadsheetEditor: React.FC = () => {
     identification: true,
   });
 
-  // ?쒕옒洹?由ъ궗?댁쫰? 硫붾돱 ?몃? ?대┃ 泥섎━瑜??꾪븳 DOM 李몄“媛믪씠??
+  // 리사이즈/컨텍스트 메뉴/외부 클릭 처리에 사용할 DOM 참조입니다.
   const tableRef = useRef<HTMLTableElement>(null);
   const colorMenuRef = useRef<HTMLDivElement>(null);
   const headerContextMenuRef = useRef<HTMLDivElement>(null);
@@ -94,6 +198,7 @@ const SpreadsheetEditor: React.FC = () => {
     );
     if (!origin) return false;
     return (
+      (origin.label || '') !== inspectedElement.label ||
       (origin.primaryKey || '') !== inspectedElement.primaryKey ||
       (origin.name || '') !== inspectedElement.name ||
       (origin.customId || '') !== inspectedElement.customId ||
@@ -106,12 +211,12 @@ const SpreadsheetEditor: React.FC = () => {
     ['#cfd8dc', '#c62828', '#ef6c00', '#f9a825', '#7cb342', '#00acc1', '#039be5', '#3949ab', '#8e24aa', '#d81b60'],
   ];
 
-  // ?고겢由?湲곕낯 硫붾돱瑜?留됱븘 而ㅼ뒪? ?몄쭛湲?UX瑜??좎??쒕떎.
+  // 브라우저 기본 컨텍스트 메뉴를 막아 편집기 UX를 유지합니다.
   const suppressContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
   }, []);
 
-  // ?⑥씪 ? ?띿뒪??媛믪쓣 媛깆떊?쒕떎.
+  // 단일 셀의 텍스트 값을 갱신합니다.
   const updateCellValue = useCallback((row: number, col: number, value: string) => {
     setCells(prev => {
       const next = prev.map(r => r.map(c => ({ ...c })));
@@ -120,7 +225,7 @@ const SpreadsheetEditor: React.FC = () => {
     });
   }, []);
 
-  // ?됱쓣 n媛?異붽??섍퀬 ?믪씠 ?곹깭???④퍡 ?뺤옣?쒕떎.
+  // 행을 n개 추가하고 행 높이 상태도 함께 확장합니다.
   const handleAddRows = useCallback((count: number) => {
     setCells(prev => {
       const cols = prev[0]?.length || 0;
@@ -135,6 +240,7 @@ const SpreadsheetEditor: React.FC = () => {
             colSpan: 1,
             isMerged: false,
             background: undefined,
+            richTextHtml: '',
             elements: [],
           }))
         );
@@ -144,7 +250,7 @@ const SpreadsheetEditor: React.FC = () => {
     setRowHeights(prev => [...prev, ...Array(count).fill(DEFAULT_ROW_HEIGHT)]);
   }, []);
 
-  // ?댁쓣 n媛?異붽??섍퀬 1024px 怨좎젙 ??湲곗??쇰줈 ???덈퉬瑜??щ텇諛고븳??
+  // 열을 n개 추가하고 1024px 기준으로 전체 열 너비를 재분배합니다.
   const handleAddCols = useCallback((count: number) => {
     setCells(prev =>
       prev.map((row, rowIdx) => {
@@ -155,6 +261,7 @@ const SpreadsheetEditor: React.FC = () => {
           colSpan: 1,
           isMerged: false,
           background: undefined,
+          richTextHtml: '',
           elements: [],
         }));
         return [...row, ...additions];
@@ -163,12 +270,102 @@ const SpreadsheetEditor: React.FC = () => {
     setColWidths(prev => computeDistributedWidths(prev.length + count));
   }, []);
 
-  // ?대컮 ?⑥씪 ??異붽? ?≪뀡?대떎.
+  // 행 1개 추가 액션입니다.
   const handleAddRow = useCallback(() => handleAddRows(1), [handleAddRows]);
-  // ?대컮 ?⑥씪 ??異붽? ?≪뀡?대떎.
+  // 열 1개 추가 액션입니다.
   const handleAddCol = useCallback(() => handleAddCols(1), [handleAddCols]);
+  // 현재 포커스된 행 1개 삭제 액션입니다.
+  const handleDeleteRow = useCallback(() => {
+    if (rowCount <= 1) return;
+    const targetRow = Math.max(0, Math.min(focusedCell.row, rowCount - 1));
+    setCells((prev) => {
+      const nextRows: Cell[][] = [];
+      for (let oldRow = 0; oldRow < prev.length; oldRow++) {
+        if (oldRow === targetRow) continue;
+        const nextRow = prev[oldRow].map((cell, oldCol) => {
+          let nextCell: Cell = { ...cell };
+          if (nextCell.mergedFrom) {
+            if (nextCell.mergedFrom.row === targetRow) {
+              nextCell = { ...nextCell, isMerged: false, mergedFrom: undefined, rowSpan: 1, colSpan: 1 };
+            } else if (nextCell.mergedFrom.row > targetRow) {
+              nextCell = {
+                ...nextCell,
+                mergedFrom: { ...nextCell.mergedFrom, row: nextCell.mergedFrom.row - 1 },
+              };
+            }
+          }
+          if (!nextCell.isMerged && (nextCell.rowSpan || 1) > 1) {
+            const spanStart = oldRow;
+            const spanEnd = oldRow + (nextCell.rowSpan || 1) - 1;
+            if (spanStart < targetRow && spanEnd >= targetRow) {
+              nextCell = { ...nextCell, rowSpan: Math.max(1, (nextCell.rowSpan || 1) - 1) };
+            }
+          }
+          return { ...nextCell, id: `${nextRows.length}-${oldCol}` };
+        });
+        nextRows.push(nextRow);
+      }
+      return nextRows;
+    });
+    setRowHeights((prev) => prev.filter((_, idx) => idx !== targetRow));
+    const nextRow = Math.max(0, Math.min(targetRow, rowCount - 2));
+    setFocusedCell((prev) => ({ ...prev, row: nextRow }));
+    setSelection({ startRow: nextRow, startCol: focusedCell.col, endRow: nextRow, endCol: focusedCell.col });
+    setEditingCell(null);
+    setInspectedElement((prev) => {
+      if (!prev) return prev;
+      if (prev.row === targetRow) return null;
+      if (prev.row > targetRow) return { ...prev, row: prev.row - 1 };
+      return prev;
+    });
+  }, [focusedCell.col, focusedCell.row, rowCount]);
 
-  // ??由ъ궗?댁쫰 ?쒖옉??留덉슦??湲곗? ?믪씠)????ν븯怨??꾩뿭 move/up 由ъ뒪?덈? 嫄대떎.
+  // 현재 포커스된 열 1개 삭제 액션입니다.
+  const handleDeleteCol = useCallback(() => {
+    if (colCount <= 1) return;
+    const targetCol = Math.max(0, Math.min(focusedCell.col, colCount - 1));
+    setCells((prev) =>
+      prev.map((row, oldRow) => {
+        const nextRow: Cell[] = [];
+        for (let oldCol = 0; oldCol < row.length; oldCol++) {
+          if (oldCol === targetCol) continue;
+          let nextCell: Cell = { ...row[oldCol] };
+          if (nextCell.mergedFrom) {
+            if (nextCell.mergedFrom.col === targetCol) {
+              nextCell = { ...nextCell, isMerged: false, mergedFrom: undefined, rowSpan: 1, colSpan: 1 };
+            } else if (nextCell.mergedFrom.col > targetCol) {
+              nextCell = {
+                ...nextCell,
+                mergedFrom: { ...nextCell.mergedFrom, col: nextCell.mergedFrom.col - 1 },
+              };
+            }
+          }
+          if (!nextCell.isMerged && (nextCell.colSpan || 1) > 1) {
+            const spanStart = oldCol;
+            const spanEnd = oldCol + (nextCell.colSpan || 1) - 1;
+            if (spanStart < targetCol && spanEnd >= targetCol) {
+              nextCell = { ...nextCell, colSpan: Math.max(1, (nextCell.colSpan || 1) - 1) };
+            }
+          }
+          nextRow.push({ ...nextCell, id: `${oldRow}-${nextRow.length}` });
+        }
+        return nextRow;
+      })
+    );
+    setColWidths((prev) => computeDistributedWidths(prev.length - 1));
+    const nextCol = Math.max(0, Math.min(targetCol, colCount - 2));
+    setFocusedCell((prev) => ({ ...prev, col: nextCol }));
+    setSelection({ startRow: focusedCell.row, startCol: nextCol, endRow: focusedCell.row, endCol: nextCol });
+    setEditingCell(null);
+    setInspectedElement((prev) => {
+      if (!prev) return prev;
+      if (prev.col === targetCol) return null;
+      if (prev.col > targetCol) return { ...prev, col: prev.col - 1 };
+      return prev;
+    });
+  }, [colCount, focusedCell.col, focusedCell.row]);
+
+  // 행 리사이즈 시작: 기준 마우스 위치/높이를 저장하고 전역 move/up 리스너를 등록합니다.
   const handleRowResizeStart = useCallback((e: React.MouseEvent, rowIndex: number) => {
     e.preventDefault();
     e.stopPropagation();
@@ -179,7 +376,7 @@ const SpreadsheetEditor: React.FC = () => {
     document.addEventListener('mouseup', handleRowResizeEnd);
   }, [rowHeights]);
 
-  // ??由ъ궗?댁쫰 以?留덉슦???대룞?됱쓣 ?ㅼ젣 ?믪씠 蹂寃쎌쑝濡?諛섏쁺?쒕떎.
+  // 행 리사이즈 중: 마우스 이동량을 실제 행 높이 변경으로 반영합니다.
   const handleRowResize = useCallback((e: MouseEvent) => {
     if (isResizingRow.current === null) return;
     const deltaY = e.clientY - resizeStartY.current;
@@ -191,14 +388,14 @@ const SpreadsheetEditor: React.FC = () => {
     });
   }, []);
 
-  // ??由ъ궗?댁쫰 醫낅즺 ???꾩뿭 由ъ뒪?덈? ?댁젣?쒕떎.
+  // 행 리사이즈 종료: 전역 리스너를 해제합니다.
   const handleRowResizeEnd = useCallback(() => {
     isResizingRow.current = null;
     document.removeEventListener('mousemove', handleRowResize);
     document.removeEventListener('mouseup', handleRowResizeEnd);
   }, [handleRowResize]);
 
-  // ??由ъ궗?댁쫰 ?쒖옉 ???댁썐 ?댁쓣 怨꾩궛???꾩껜 ??1024px) 怨좎젙??以鍮꾪븳??
+  // 열 리사이즈 시작: 기준 너비와 이웃 열 정보를 계산해 총합 너비 고정을 준비합니다.
   const handleColResizeStart = useCallback((e: React.MouseEvent, colIndex: number) => {
     e.preventDefault();
     e.stopPropagation();
@@ -212,7 +409,7 @@ const SpreadsheetEditor: React.FC = () => {
     document.addEventListener('mouseup', handleColResizeEnd);
   }, [colWidths]);
 
-  // ??由ъ궗?댁쫰 以??꾩옱 ???댁썐 ???덈퉬瑜??숈떆??議곗젙??珥앺빀 ??쓣 ?좎??쒕떎.
+  // 열 리사이즈 중: 현재 열/이웃 열 너비를 동시에 조정해 총합 너비를 유지합니다.
   const handleColResize = useCallback((e: MouseEvent) => {
     if (isResizingCol.current === null) return;
     const deltaX = e.clientX - resizeStartX.current;
@@ -231,12 +428,12 @@ const SpreadsheetEditor: React.FC = () => {
         return next;
       });
     } else {
-      // ?⑥씪 ?댁씪 ?뚮뒗 ?꾩껜 ??쓣 ??긽 怨좎젙
+      // 열이 하나뿐이면 전체 너비를 고정합니다.
       setColWidths([GRID_CELL_WIDTH]);
     }
   }, []);
 
-  // ??由ъ궗?댁쫰 醫낅즺 ???꾩뿭 由ъ뒪???꾩떆 李몄“瑜??뺣━?쒕떎.
+  // 열 리사이즈 종료: 전역 리스너와 임시 참조를 정리합니다.
   const handleColResizeEnd = useCallback(() => {
     isResizingCol.current = null;
     resizeNeighborIndex.current = null;
@@ -244,14 +441,14 @@ const SpreadsheetEditor: React.FC = () => {
     document.removeEventListener('mouseup', handleColResizeEnd);
   }, [handleColResize]);
 
-  // 蹂묓빀 ? 醫뚰몴瑜??ㅼ젣 ?듭빱 ? 醫뚰몴濡??뺢퇋?뷀븳??
+  // 병합 셀 좌표를 실제 기준 셀 좌표로 정규화합니다.
   const getActualCell = useCallback((row: number, col: number): CellPosition => {
     const cell = cells[row]?.[col];
     if (cell?.mergedFrom) return cell.mergedFrom;
     return { row, col };
   }, [cells]);
 
-  // ? ?쒕옒洹??좏깮 ?쒖옉 吏?먯쓣 ?ㅼ젙?쒕떎.
+  // 셀 드래그 선택 시작 지점을 설정합니다.
   const handleCellMouseDown = useCallback((e: React.MouseEvent, row: number, col: number) => {
     e.preventDefault();
     const actual = getActualCell(row, col);
@@ -261,21 +458,21 @@ const SpreadsheetEditor: React.FC = () => {
     setEditingCell(null);
   }, [getActualCell]);
 
-  // ?쒕옒洹?以??ъ씤?곌? 吏?섍컙 ?源뚯? ?좏깮 踰붿쐞瑜??뺤옣?쒕떎.
+  // 드래그 중 마우스 위치에 따라 선택 범위를 확장합니다.
   const handleCellMouseEnter = useCallback((row: number, col: number) => {
     if (!isSelecting) return;
     const actual = getActualCell(row, col);
     setSelection(prev => ({ ...prev, endRow: actual.row, endCol: actual.col }));
   }, [isSelecting, getActualCell]);
 
-  // 留덉슦???????쒕옒洹??좏깮 紐⑤뱶瑜?醫낅즺?쒕떎.
+  // 마우스 업 시 드래그 선택 모드를 종료합니다.
   useEffect(() => {
     const up = () => setIsSelecting(false);
     document.addEventListener('mouseup', up);
     return () => document.removeEventListener('mouseup', up);
   }, []);
 
-  // ?몄쭛 ?낅젰 ?꾨뱶瑜??쒖쇅???꾩껜 ?붾㈃ ?쒕옒洹??띿뒪???좏깮??李⑤떒?쒕떎.
+  // 편집 필드 외 영역에서는 드래그/텍스트 선택을 차단합니다.
   useEffect(() => {
     const isEditableTarget = (target: EventTarget | null) => {
       if (!(target instanceof HTMLElement)) return false;
@@ -301,14 +498,15 @@ const SpreadsheetEditor: React.FC = () => {
     };
   }, []);
 
-  // ?붾툝?대┃??????몄쭛 紐⑤뱶濡??꾪솚?쒕떎.
+  // 더블클릭한 셀을 편집 모드로 전환합니다.
   const handleCellDoubleClick = useCallback((row: number, col: number) => {
     const actual = getActualCell(row, col);
+    const target = cells[actual.row][actual.col];
     setEditingCell(actual);
-    setEditingValue(cells[actual.row][actual.col].value);
+    setEditingValue(target.richTextHtml || buildDefaultRichTextHtml(target));
   }, [cells, getActualCell]);
 
-  // ?⑥씪 ?대┃ ???ъ빱???좏깮??留욎텛怨?RNB ?좏깮 ?곹깭瑜??댁젣?쒕떎.
+  // 셀 클릭 시 포커스/선택을 맞추고 RNB 선택 상태를 해제합니다.
   const handleCellClick = useCallback((row: number, col: number) => {
     const actual = getActualCell(row, col);
     setFocusedCell(actual);
@@ -316,21 +514,44 @@ const SpreadsheetEditor: React.FC = () => {
     setInspectedElement(null);
   }, [getActualCell]);
 
-  // ? ?몄쭛???뺤젙??媛믪쓣 ??ν븯怨??몄쭛 紐⑤뱶瑜?醫낅즺?쒕떎.
+  // 현재 편집 내용을 파싱해 저장하고 편집 모드를 종료합니다.
   const handleCellEditComplete = useCallback(() => {
     if (editingCell) {
-      updateCellValue(editingCell.row, editingCell.col, editingValue);
+      const cell = cells[editingCell.row]?.[editingCell.col];
+      if (!cell) {
+        setEditingCell(null);
+        return;
+      }
+      const parsed = parseRichEditorPayload(editingValue, cell.elements || []);
+      setCells(prev =>
+        prev.map((row, rIdx) =>
+          row.map((cell, cIdx) => {
+            if (rIdx !== editingCell.row || cIdx !== editingCell.col) return cell;
+            return { ...cell, value: parsed.plain, richTextHtml: parsed.html, elements: parsed.elements };
+          })
+        )
+      );
       setEditingCell(null);
     }
-  }, [editingCell, editingValue, updateCellValue]);
+  }, [cells, editingCell, editingValue]);
 
   const handleCommitEditing = useCallback((row: number, col: number, value: string) => {
-    updateCellValue(row, col, value);
-    setEditingValue(value);
+    const current = cells[row]?.[col];
+    if (!current) return;
+    const parsed = parseRichEditorPayload(value, current.elements || []);
+    setCells(prev =>
+      prev.map((rowCells, rIdx) =>
+        rowCells.map((cell, cIdx) => {
+          if (rIdx !== row || cIdx !== col) return cell;
+          return { ...cell, value: parsed.plain, richTextHtml: parsed.html, elements: parsed.elements };
+        })
+      )
+    );
+    setEditingValue(parsed.html);
     setEditingCell(null);
-  }, [updateCellValue]);
+  }, [cells]);
 
-  // ?꾩옱 ????좏깮 踰붿쐞???ы븿?섎뒗吏(蹂묓빀 踰붿쐞 ?ы븿) ?먮퀎?쒕떎.
+  // 현재 셀이 선택 범위에 포함되는지(병합 범위 포함) 판단합니다.
   const isCellSelected = useCallback((row: number, col: number) => {
     const minRow = Math.min(selection.startRow, selection.endRow);
     const maxRow = Math.max(selection.startRow, selection.endRow);
@@ -346,12 +567,12 @@ const SpreadsheetEditor: React.FC = () => {
     return row >= minRow && row <= maxRow && col >= minCol && col <= maxCol;
   }, [selection, cells]);
 
-  // ?꾩옱 ????ㅻ낫???ъ빱????몄? ?뺤씤?쒕떎.
+  // 현재 셀이 포커스 셀인지 확인합니다.
   const isCellFocused = useCallback((row: number, col: number) => {
     return focusedCell.row === row && focusedCell.col === col;
   }, [focusedCell]);
 
-  // ?좏깮 ?ш컖?뺤쓣 醫뚯긽???듭빱 湲곗? 蹂묓빀 ?濡?留뚮뱺??
+  // 선택 영역을 좌상단 기준 하나의 병합 셀로 만듭니다.
   const handleMergeCells = useCallback(() => {
     const minRow = Math.min(selection.startRow, selection.endRow);
     const maxRow = Math.max(selection.startRow, selection.endRow);
@@ -373,7 +594,7 @@ const SpreadsheetEditor: React.FC = () => {
     });
   }, [selection]);
 
-  // ?좏깮 踰붿쐞??嫄몃┛ 蹂묓빀 ?듭빱?ㅼ쓣 李얠븘 蹂묓빀 ?곸뿭 ?꾩껜瑜??댁젣?쒕떎.
+  // 선택 범위와 겹치는 병합 셀을 찾아 병합 영역 전체를 해제합니다.
   const handleUnmergeCells = useCallback(() => {
     const minRow = Math.min(selection.startRow, selection.endRow);
     const maxRow = Math.max(selection.startRow, selection.endRow);
@@ -419,7 +640,7 @@ const SpreadsheetEditor: React.FC = () => {
     });
   }, [selection]);
 
-  // ?붿궡????諛⑺뼢?쇰줈 ?ъ빱???좏깮 ????대룞?쒕떎.
+  // 화살표 방향으로 포커스와 선택 셀을 이동합니다.
   const moveSelection = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     let newRow = focusedCell.row;
     let newCol = focusedCell.col;
@@ -431,7 +652,20 @@ const SpreadsheetEditor: React.FC = () => {
     setSelection({ startRow: newRow, startCol: newCol, endRow: newRow, endCol: newCol });
   }, [focusedCell, rowCount, colCount]);
 
-  // ?좏깮 踰붿쐞??? ?띿뒪??諛곌꼍/?섎━癒쇳듃瑜?珥덇린?뷀븳??
+  const extendSelection = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
+    setSelection((prev) => {
+      let nextEndRow = prev.endRow;
+      let nextEndCol = prev.endCol;
+      if (direction === 'up') nextEndRow = Math.max(0, nextEndRow - 1);
+      if (direction === 'down') nextEndRow = Math.min(rowCount - 1, nextEndRow + 1);
+      if (direction === 'left') nextEndCol = Math.max(0, nextEndCol - 1);
+      if (direction === 'right') nextEndCol = Math.min(colCount - 1, nextEndCol + 1);
+      setFocusedCell({ row: nextEndRow, col: nextEndCol });
+      return { ...prev, endRow: nextEndRow, endCol: nextEndCol };
+    });
+  }, [rowCount, colCount]);
+
+  // 선택 범위의 값/배경/리치텍스트/엘리먼트를 초기화합니다.
   const clearSelectionContents = useCallback(() => {
     const minRow = Math.min(selection.startRow, selection.endRow);
     const maxRow = Math.max(selection.startRow, selection.endRow);
@@ -453,6 +687,7 @@ const SpreadsheetEditor: React.FC = () => {
             ...cell,
             value: '',
             background: undefined,
+            richTextHtml: '',
             elements: [],
           };
         })
@@ -461,7 +696,7 @@ const SpreadsheetEditor: React.FC = () => {
     setInspectedElement(null);
   }, [selection, getActualCell]);
 
-  // ?꾩뿭 ?ㅻ낫???⑥텞???대룞/?몄쭛/蹂묓빀/??젣/紐⑤떖 ?リ린)瑜?泥섎━?쒕떎.
+  // 전역 키보드 단축키(이동/편집/병합/삭제/모달 닫기)를 처리합니다.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -493,6 +728,11 @@ const SpreadsheetEditor: React.FC = () => {
           setIsElementModalOpen(false);
           return;
         }
+        if (isAddTabModalOpen) {
+          e.preventDefault();
+          setIsAddTabModalOpen(false);
+          return;
+        }
         if (isSettingsOpen) {
           e.preventDefault();
           setIsSettingsOpen(false);
@@ -507,8 +747,21 @@ const SpreadsheetEditor: React.FC = () => {
         } else if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
           e.preventDefault();
           const active = document.activeElement as HTMLElement | null;
-          const nextValue = active?.isContentEditable ? (active.textContent || '') : editingValue;
-          updateCellValue(editingCell.row, editingCell.col, nextValue);
+          const nextHtml = active?.isContentEditable ? (active.innerHTML || '') : editingValue;
+          const current = cells[editingCell.row]?.[editingCell.col];
+          if (!current) {
+            setEditingCell(null);
+            return;
+          }
+          const parsed = parseRichEditorPayload(nextHtml, current.elements || []);
+          setCells(prev =>
+            prev.map((row, rIdx) =>
+              row.map((cell, cIdx) => {
+                if (rIdx !== editingCell.row || cIdx !== editingCell.col) return cell;
+                return { ...cell, value: parsed.plain, richTextHtml: parsed.html, elements: parsed.elements };
+              })
+            )
+          );
           setEditingCell(null);
           const nextCol = editingCell.col < colCount - 1 ? editingCell.col + 1 : 0;
           const nextRow = editingCell.col < colCount - 1
@@ -535,7 +788,19 @@ const SpreadsheetEditor: React.FC = () => {
       }
 
       if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'm') {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          extendSelection('up');
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          extendSelection('down');
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          extendSelection('left');
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          extendSelection('right');
+        } else if (e.key === 'm') {
           e.preventDefault();
           handleMergeCells();
         } else if (e.key === 'u') {
@@ -551,10 +816,11 @@ const SpreadsheetEditor: React.FC = () => {
       else if (e.key === 'Enter') {
         e.preventDefault();
         setEditingCell(focusedCell);
-        setEditingValue(cells[focusedCell.row][focusedCell.col].value);
+        const target = cells[focusedCell.row][focusedCell.col];
+        setEditingValue(target.richTextHtml || buildDefaultRichTextHtml(target));
       } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         setEditingCell(focusedCell);
-        setEditingValue(e.key);
+        setEditingValue(plainTextToHtml(e.key));
       }
     };
     document.addEventListener('keydown', handleKeyDown);
@@ -563,6 +829,7 @@ const SpreadsheetEditor: React.FC = () => {
     editingCell,
     handleCellEditComplete,
     moveSelection,
+    extendSelection,
     focusedCell,
     cells,
     handleMergeCells,
@@ -571,24 +838,25 @@ const SpreadsheetEditor: React.FC = () => {
     isShortcutOpen,
     isDocOpen,
     isElementModalOpen,
+    isAddTabModalOpen,
     isSettingsOpen,
     headerContextMenu,
     clearSelectionContents,
   ]);
 
-  // ???ㅻ뜑 ?대┃ ???대떦 ???꾩껜瑜??좏깮?쒕떎.
+  // 행 헤더 클릭 시 해당 행 전체를 선택합니다.
   const handleRowHeaderClick = useCallback((rowIndex: number) => {
     setSelection({ startRow: rowIndex, startCol: 0, endRow: rowIndex, endCol: Math.max(0, colCount - 1) });
     setFocusedCell({ row: rowIndex, col: 0 });
   }, [colCount]);
 
-  // ???ㅻ뜑 ?대┃ ???대떦 ???꾩껜瑜??좏깮?쒕떎.
+  // 열 헤더 클릭 시 해당 열 전체를 선택합니다.
   const handleColHeaderClick = useCallback((colIndex: number) => {
     setSelection({ startRow: 0, startCol: colIndex, endRow: Math.max(0, rowCount - 1), endCol: colIndex });
     setFocusedCell({ row: 0, col: colIndex });
   }, [rowCount]);
 
-  // ?좏깮 踰붿쐞 ???諛곌꼍?됱쓣 ?쇨큵 ?곸슜?쒕떎.
+  // 선택 범위 전체에 배경색을 적용합니다.
   const applyBackgroundToSelection = useCallback((color: string) => {
     const minRow = Math.min(selection.startRow, selection.endRow);
     const maxRow = Math.max(selection.startRow, selection.endRow);
@@ -674,7 +942,98 @@ const SpreadsheetEditor: React.FC = () => {
     [selection]
   );
 
-  // ?좏깮 踰붿쐞 媛????吏???섎━癒쇳듃瑜?異붽??쒕떎.
+  const applyFontFamilyToSelection = useCallback((fontFamily: string) => {
+    const minRow = Math.min(selection.startRow, selection.endRow);
+    const maxRow = Math.max(selection.startRow, selection.endRow);
+    const minCol = Math.min(selection.startCol, selection.endCol);
+    const maxCol = Math.max(selection.startCol, selection.endCol);
+
+    setCells(prev =>
+      prev.map((row, rIdx) =>
+        row.map((cell, cIdx) => {
+          if (rIdx < minRow || rIdx > maxRow || cIdx < minCol || cIdx > maxCol) return cell;
+          return { ...cell, fontFamily };
+        })
+      )
+    );
+  }, [selection]);
+
+  const applyFontSizeToSelection = useCallback((fontSize: string) => {
+    const minRow = Math.min(selection.startRow, selection.endRow);
+    const maxRow = Math.max(selection.startRow, selection.endRow);
+    const minCol = Math.min(selection.startCol, selection.endCol);
+    const maxCol = Math.max(selection.startCol, selection.endCol);
+
+    setCells(prev =>
+      prev.map((row, rIdx) =>
+        row.map((cell, cIdx) => {
+          if (rIdx < minRow || rIdx > maxRow || cIdx < minCol || cIdx > maxCol) return cell;
+          return { ...cell, fontSize };
+        })
+      )
+    );
+  }, [selection]);
+
+  const applyFontColorToSelection = useCallback((fontColor: string) => {
+    const minRow = Math.min(selection.startRow, selection.endRow);
+    const maxRow = Math.max(selection.startRow, selection.endRow);
+    const minCol = Math.min(selection.startCol, selection.endCol);
+    const maxCol = Math.max(selection.startCol, selection.endCol);
+
+    setCells(prev =>
+      prev.map((row, rIdx) =>
+        row.map((cell, cIdx) => {
+          if (rIdx < minRow || rIdx > maxRow || cIdx < minCol || cIdx > maxCol) return cell;
+          return { ...cell, fontColor };
+        })
+      )
+    );
+  }, [selection]);
+
+  const applyFontBackgroundToSelection = useCallback((fontBackground: string) => {
+    const minRow = Math.min(selection.startRow, selection.endRow);
+    const maxRow = Math.max(selection.startRow, selection.endRow);
+    const minCol = Math.min(selection.startCol, selection.endCol);
+    const maxCol = Math.max(selection.startCol, selection.endCol);
+
+    setCells(prev =>
+      prev.map((row, rIdx) =>
+        row.map((cell, cIdx) => {
+          if (rIdx < minRow || rIdx > maxRow || cIdx < minCol || cIdx > maxCol) return cell;
+          return { ...cell, fontBackground };
+        })
+      )
+    );
+  }, [selection]);
+
+  const toggleTextStyleToSelection = useCallback((style: 'bold' | 'italic' | 'strikeThrough') => {
+    const minRow = Math.min(selection.startRow, selection.endRow);
+    const maxRow = Math.max(selection.startRow, selection.endRow);
+    const minCol = Math.min(selection.startCol, selection.endCol);
+    const maxCol = Math.max(selection.startCol, selection.endCol);
+
+    setCells(prev => {
+      let shouldEnable = false;
+      for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+          if (!prev[r]?.[c]?.[style]) {
+            shouldEnable = true;
+            break;
+          }
+        }
+        if (shouldEnable) break;
+      }
+
+      return prev.map((row, rIdx) =>
+        row.map((cell, cIdx) => {
+          if (rIdx < minRow || rIdx > maxRow || cIdx < minCol || cIdx > maxCol) return cell;
+          return { ...cell, [style]: shouldEnable };
+        })
+      );
+    });
+  }, [selection]);
+
+  // 선택 범위 각 셀에 지정한 엘리먼트를 추가합니다.
   const addElementToSelection = useCallback((type: string, label: string) => {
     const minRow = Math.min(selection.startRow, selection.endRow);
     const maxRow = Math.max(selection.startRow, selection.endRow);
@@ -686,7 +1045,7 @@ const SpreadsheetEditor: React.FC = () => {
           if (rIdx >= minRow && rIdx <= maxRow && cIdx >= minCol && cIdx <= maxCol) {
             const nextElements = [...(cell.elements || [])];
             const defaultToken = `${label}_${formatCurrentTimeToken()}`;
-            nextElements.push({
+            const nextElement = {
               id: `${rIdx}-${cIdx}-${Date.now()}-${nextElements.length}`,
               type,
               label,
@@ -694,8 +1053,13 @@ const SpreadsheetEditor: React.FC = () => {
               name: defaultToken,
               customId: '',
               placeholder: '',
-            });
-            return { ...cell, elements: nextElements };
+            };
+            nextElements.push(nextElement);
+            const textHtml = plainTextToHtml(stripElementTokens(cell.value || ''));
+            const baseHtml = cell.richTextHtml || textHtml;
+            const nextHtml = baseHtml ? `${baseHtml} ${toElementHtml(nextElement)}` : toElementHtml(nextElement);
+            const parsed = parseRichEditorPayload(nextHtml, nextElements);
+            return { ...cell, elements: parsed.elements, richTextHtml: parsed.html, value: parsed.plain };
           }
           return cell;
         })
@@ -703,7 +1067,7 @@ const SpreadsheetEditor: React.FC = () => {
     );
   }, [selection]);
 
-  // ? ?대? ?섎━癒쇳듃瑜??대┃?섎㈃ ?대떦 ?섎━癒쇳듃 ?뺣낫瑜?RNB??濡쒕뱶?쒕떎.
+
   const handleElementClick = useCallback((e: React.MouseEvent, row: number, col: number, elementId: string) => {
     e.stopPropagation();
     const cell = cells[row]?.[col];
@@ -714,7 +1078,7 @@ const SpreadsheetEditor: React.FC = () => {
       col,
       elementId: target.id,
       type: target.type,
-      label: target.label,
+      label: target.label || '',
       primaryKey: target.primaryKey || '',
       name: target.name || target.label || '',
       customId: target.customId || '',
@@ -747,7 +1111,7 @@ const SpreadsheetEditor: React.FC = () => {
   }, [inspectedElement]);
 
   // RNB 입력 변경은 임시 편집 상태(inspectedElement)에만 반영합니다.
-  const handleRnbFieldChange = useCallback((field: 'primaryKey' | 'name' | 'customId' | 'placeholder', value: string) => {
+  const handleRnbFieldChange = useCallback((field: 'label' | 'primaryKey' | 'name' | 'customId' | 'placeholder', value: string) => {
     setInspectedElement(prev => {
       if (!prev) return prev;
       return { ...prev, [field]: value };
@@ -762,17 +1126,20 @@ const SpreadsheetEditor: React.FC = () => {
         row.map((cell, cIdx) => {
           if (rIdx !== inspectedElement.row || cIdx !== inspectedElement.col) return cell;
           const nextElements = (cell.elements || []).map((el) =>
-            el.id === inspectedElement.elementId
-              ? {
-                  ...el,
-                  primaryKey: inspectedElement.primaryKey,
-                  name: inspectedElement.name,
-                  customId: inspectedElement.customId,
+                el.id === inspectedElement.elementId
+                  ? {
+                      ...el,
+                      label: inspectedElement.label,
+                      primaryKey: inspectedElement.primaryKey,
+                      name: inspectedElement.name,
+                      customId: inspectedElement.customId,
                   placeholder: inspectedElement.placeholder || '',
                 }
               : el
           );
-          return { ...cell, elements: nextElements };
+          const syncedHtml = syncElementNodesInHtml(cell.richTextHtml || buildDefaultRichTextHtml(cell), nextElements);
+          const parsed = parseRichEditorPayload(syncedHtml, nextElements);
+          return { ...cell, elements: parsed.elements, richTextHtml: parsed.html, value: parsed.plain };
         })
       )
     );
@@ -783,7 +1150,7 @@ const SpreadsheetEditor: React.FC = () => {
     setInspectedElement(null);
   }, []);
 
-  // ?됱긽 踰꾪듉 ?꾩튂 湲곗??쇰줈 ?붾젅???앹뾽 醫뚰몴瑜??곕떎.
+  // 색상 버튼 위치를 기준으로 컬러 팔레트 팝업 좌표를 엽니다.
   const openColorMenu = useCallback((e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect();
     setColorMenu({ x: rect.left, y: rect.bottom + 4 });
@@ -800,12 +1167,12 @@ const SpreadsheetEditor: React.FC = () => {
     });
   }, []);
 
-  // RNB ?묒씠???뱀뀡???대┝/?ロ옒 ?곹깭瑜??좉??쒕떎.
+  // RNB 각 섹션의 열림/닫힘 상태를 토글합니다.
   const toggleRnbSection = useCallback((key: keyof typeof rnbOpenSections) => {
     setRnbOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
-  // ?됱긽 硫붾돱 諛붽묑 ?대┃ ???붾젅?몃? ?ル뒗??
+  // 색상 메뉴 바깥 클릭 시 팔레트를 닫습니다.
   useEffect(() => {
     if (!colorMenu) return;
     const onMouseDown = (e: MouseEvent) => {
@@ -828,7 +1195,7 @@ const SpreadsheetEditor: React.FC = () => {
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [headerContextMenu]);
 
-  // ???ㅻ뜑 ? ?뚮뜑留??좏깮 ?곹깭/由ъ궗?댁쫰 ?몃뱾 ?ы븿).
+  // 행 헤더 렌더러(선택 상태/리사이즈 핸들 포함)입니다.
   const renderRowHeader = (rowIndex: number) => {
     const isRowSelected = selection.startCol === 0 && selection.endCol === Math.max(0, colCount - 1) && selection.startRow === rowIndex && selection.endRow === rowIndex;
     return (
@@ -845,7 +1212,7 @@ const SpreadsheetEditor: React.FC = () => {
     );
   };
 
-  // ???ㅻ뜑 ? ?뚮뜑留??뚰뙆踰??쇰꺼/由ъ궗?댁쫰 ?몃뱾 ?ы븿).
+  // 열 헤더 렌더러(알파벳 라벨/리사이즈 핸들 포함)입니다.
   const renderColHeader = (colIndex: number) => {
     const colLetter = String.fromCharCode(65 + (colIndex % 26));
     const colNumber = Math.floor(colIndex / 26);
@@ -870,17 +1237,35 @@ const SpreadsheetEditor: React.FC = () => {
   const minSelCol = Math.min(selection.startCol, selection.endCol);
   const maxSelCol = Math.max(selection.startCol, selection.endCol);
   const isSingleSelection = minSelRow === maxSelRow && minSelCol === maxSelCol;
+  const toColLabel = (colIndex: number) => {
+    const colLetter = String.fromCharCode(65 + (colIndex % 26));
+    const colNumber = Math.floor(colIndex / 26);
+    return colNumber > 0 ? String.fromCharCode(64 + colNumber) + colLetter : colLetter;
+  };
+  const selectedCell = cells[minSelRow]?.[minSelCol];
+  const cellQuickMenu = {
+    selectionLabel: `${minSelRow + 1}, ${toColLabel(minSelCol)}`,
+    bold: !!selectedCell?.bold,
+    italic: !!selectedCell?.italic,
+    strikeThrough: !!selectedCell?.strikeThrough,
+    horizontalAlign: selectedCell?.horizontalAlign || 'left',
+    verticalAlign: selectedCell?.verticalAlign || 'middle',
+    background: selectedCell?.background ?? '',
+    fontSize: selectedCell?.fontSize || '12px',
+    fontColor: selectedCell?.fontColor || '#2f343b',
+    fontBackground: selectedCell?.fontBackground || '#ffffff',
+  };
   const lnbSelectGroups: LnbGroup[] = [
     {
-      title: 'Input Elements',
+      title: '입력 항목',
       items: [
-        { id: 'input', icon: 'T', label: '입력 박스', action: () => { addElementToSelection('text', 'INP'); } },
+        { id: 'input', icon: 'T', label: '입력 박스', action: () => { addElementToSelection('text', 'IPT'); } },
         { id: 'table', icon: '\u2263', label: '텍스트 영역', action: () => { addElementToSelection('textarea', 'TXT'); } },
         { id: 'select', icon: '1', label: '숫자', action: () => { addElementToSelection('number', 'NUB'); } },
       ],
     },
     {
-      title: 'Select Elements',
+      title: '선택 항목',
       items: [
         { id: 'listbox', icon: '\u25BE', label: '셀렉트 박스', action: () => { addElementToSelection('select', 'SLT'); } },
         { id: 'check', icon: '\u2611', label: '체크 박스', action: () => { addElementToSelection('checkbox', 'CHK'); } },
@@ -888,7 +1273,7 @@ const SpreadsheetEditor: React.FC = () => {
       ],
     },
     {
-      title: 'View Elements',
+      title: '표시 항목',
       items: [
         { id: 'view-label', icon: 'L', label: '라벨', action: () => { addElementToSelection('label', 'LBL'); } },
         { id: 'view-url', icon: '\uD83D\uDD17', label: 'URL', action: () => { addElementToSelection('url', 'URL'); } },
@@ -896,7 +1281,7 @@ const SpreadsheetEditor: React.FC = () => {
       ],
     },
     {
-      title: 'Action Elements',
+      title: '액션 항목',
       items: [
         { id: 'action-button', icon: '\u25A3', label: '버튼', action: () => { addElementToSelection('button', 'BTN'); } },
         { id: 'action-user-select', icon: '\u25C9', label: '사용자선택', action: () => { addElementToSelection('user-select', 'USR'); } },
@@ -909,31 +1294,109 @@ const SpreadsheetEditor: React.FC = () => {
   ];
   const lnbAutoGroups: LnbGroup[] = [
     {
-      title: 'Auto Fill',
+      title: '기안자 정보',
       items: [
-        { id: 'auto-name', icon: '\u2699', label: '이름 규칙' },
-        { id: 'auto-id', icon: '\u2317', label: 'ID 생성' },
-        { id: 'auto-bind', icon: '\u223F', label: '데이터 연결' },
+        {
+          id: 'drafter-name',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2" /><path d="M6 19c0-3.2 2.7-5.4 6-5.4s6 2.2 6 5.4" /></svg>,
+          label: '이름',
+        },
+        {
+          id: 'drafter-dept',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1.6" /><line x1="9" y1="9" x2="9" y2="9.1" /><line x1="12" y1="9" x2="12" y2="9.1" /><line x1="15" y1="9" x2="15" y2="9.1" /><line x1="9" y1="12" x2="9" y2="12.1" /><line x1="12" y1="12" x2="12" y2="12.1" /><line x1="15" y1="12" x2="15" y2="12.1" /><line x1="11" y1="19" x2="11" y2="15.5" /><line x1="13" y1="19" x2="13" y2="15.5" /></svg>,
+          label: '부서명',
+        },
+        {
+          id: 'drafter-title',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="7.5" width="15" height="10.5" rx="1.8" /><path d="M9 7.5v-1a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" /><line x1="4.5" y1="11.2" x2="19.5" y2="11.2" /></svg>,
+          label: '직책',
+        },
+        {
+          id: 'drafter-empno',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="13" rx="1.8" /><circle cx="9" cy="10" r="1.6" /><line x1="12" y1="9" x2="16.5" y2="9" /><line x1="12" y1="12" x2="16.5" y2="12" /><line x1="7.5" y1="15.2" x2="16.5" y2="15.2" /></svg>,
+          label: '사번',
+        },
+        {
+          id: 'drafter-company-phone',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7.5h10a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5H7a1.5 1.5 0 0 1-1.5-1.5V9A1.5 1.5 0 0 1 7 7.5Z" /><path d="M9.2 7.5V6.2a2.8 2.8 0 1 1 5.6 0v1.3" /><line x1="9.3" y1="11.1" x2="14.7" y2="11.1" /><line x1="9.3" y1="13.8" x2="14.7" y2="13.8" /></svg>,
+          label: '회사전화',
+        },
+        {
+          id: 'drafter-mobile-phone',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3.8" width="8" height="16.4" rx="1.8" /><line x1="10.4" y1="6.4" x2="13.6" y2="6.4" /><circle cx="12" cy="17.1" r="0.9" /></svg>,
+          label: '휴대전화',
+        },
+        {
+          id: 'drafter-fax',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4.5" width="12" height="5.5" rx="0.8" /><rect x="4.5" y="10" width="15" height="9.5" rx="1.4" /><line x1="8" y1="13.5" x2="16" y2="13.5" /><line x1="8" y1="16.2" x2="13.5" y2="16.2" /><line x1="17.2" y1="12.6" x2="17.2" y2="12.7" /></svg>,
+          label: '팩스번호',
+        },
       ],
     },
     {
-      title: 'Auto Layout',
+      title: '회사 정보',
       items: [
-        { id: 'auto-align', icon: '\u25A6', label: '정렬 맞춤' },
-        { id: 'auto-gap', icon: '\u21F5', label: '간격 정리' },
-        { id: 'auto-size', icon: '\u2194', label: '크기 정규화' },
+        {
+          id: 'company-name',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5" width="15" height="14" rx="1.7" /><line x1="8.2" y1="9" x2="8.3" y2="9" /><line x1="11.2" y1="9" x2="11.3" y2="9" /><line x1="14.2" y1="9" x2="14.3" y2="9" /><line x1="8.2" y1="12.2" x2="8.3" y2="12.2" /><line x1="11.2" y1="12.2" x2="11.3" y2="12.2" /><line x1="14.2" y1="12.2" x2="14.3" y2="12.2" /><line x1="10.8" y1="19" x2="10.8" y2="15.4" /><line x1="13.2" y1="19" x2="13.2" y2="15.4" /></svg>,
+          label: '회사명',
+        },
+        {
+          id: 'company-ceo',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.1" /><path d="M6 19c0-3.2 2.7-5.3 6-5.3s6 2.1 6 5.3" /><path d="M15.7 5.6l1 1.6 1.8.4-1.2 1.4.1 1.9-1.7-.7-1.7.7.1-1.9-1.2-1.4 1.8-.4z" /></svg>,
+          label: '대표이사명',
+        },
+        {
+          id: 'company-main-phone',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.8 5.2h6.4a1.8 1.8 0 0 1 1.8 1.8v10a1.8 1.8 0 0 1-1.8 1.8H8.8A1.8 1.8 0 0 1 7 17V7a1.8 1.8 0 0 1 1.8-1.8Z" /><line x1="10.4" y1="8.3" x2="13.6" y2="8.3" /><line x1="10.4" y1="11.4" x2="13.6" y2="11.4" /><circle cx="12" cy="15.7" r="0.9" /></svg>,
+          label: '대표 전화',
+        },
+        {
+          id: 'company-address',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s5-5.2 5-9A5 5 0 1 0 7 11c0 3.8 5 9 5 9Z" /><circle cx="12" cy="11" r="1.7" /></svg>,
+          label: '회사 주소',
+        },
       ],
     },
     {
-      title: 'Validation',
+      title: '문서 정보',
       items: [
-        { id: 'auto-required', icon: '\u2713', label: '필수값' },
-        { id: 'auto-type', icon: '\u25C8', label: '타입 검사' },
-        { id: 'auto-range', icon: '\u2261', label: '범위 검사' },
+        {
+          id: 'doc-number',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4.8" width="14" height="14.4" rx="1.8" /><line x1="8.2" y1="9.2" x2="15.8" y2="9.2" /><line x1="8.2" y1="12.4" x2="15.8" y2="12.4" /><line x1="8.2" y1="15.6" x2="13.6" y2="15.6" /></svg>,
+          label: '문서 번호',
+        },
+        {
+          id: 'doc-registered-date',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.8" y="5.5" width="14.4" height="13.7" rx="1.6" /><line x1="4.8" y1="9.2" x2="19.2" y2="9.2" /><line x1="9" y1="3.9" x2="9" y2="7" /><line x1="15" y1="3.9" x2="15" y2="7" /><line x1="9" y1="13.2" x2="12.2" y2="13.2" /></svg>,
+          label: '등록일',
+        },
+        {
+          id: 'doc-closed-date',
+          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.8" y="5.5" width="14.4" height="13.7" rx="1.6" /><line x1="4.8" y1="9.2" x2="19.2" y2="9.2" /><line x1="9" y1="3.9" x2="9" y2="7" /><line x1="15" y1="3.9" x2="15" y2="7" /><line x1="8.6" y1="14.6" x2="11.1" y2="17.1" /><line x1="11.1" y1="17.1" x2="15.2" y2="13" /></svg>,
+          label: '종결 일자',
+        },
       ],
     },
   ];
-  const activeLnbGroups = lnbTab === '선택' ? lnbSelectGroups : lnbAutoGroups;
+  const lnbBaseGroups: LnbGroup[] = [];
+  const lnbChoiceGroups: LnbGroup[] = [lnbSelectGroups[0], lnbSelectGroups[1], lnbSelectGroups[2], lnbSelectGroups[3]];
+  const lnbCustomGroups: LnbGroup[] = [
+    {
+      title: 'Custom Elements',
+      items: [
+        { id: 'custom-body-html', icon: '</>', label: '본문 HTML', action: () => { addElementToSelection('body-html', 'HTML'); } },
+      ],
+    },
+  ];
+  const activeLnbGroups =
+    lnbTab === '기본 설정'
+      ? lnbBaseGroups
+      : lnbTab === '자동 입력'
+        ? lnbAutoGroups
+        : lnbTab === '선택 입력'
+          ? lnbChoiceGroups
+          : lnbCustomGroups;
 
   return (
     <>
@@ -947,6 +1410,82 @@ const SpreadsheetEditor: React.FC = () => {
             onChangeTab={setLnbTab}
             onOpenSettings={() => setIsSettingsOpen(true)}
           />
+        }
+        mainTop={
+          <div className="main-tabs-wrap">
+            <div className="main-tabs">
+              <button
+                type="button"
+                className={`main-tab ${activeMainTab === 'sheet' ? 'active' : ''}`}
+                onClick={() => setActiveMainTab('sheet')}
+              >
+                <span className="main-tab-label">{mainTabLabel}</span>
+                {activeMainTab === 'sheet' && (
+                  <span className="main-tab-inline-icons">
+                    <span
+                      className="main-tab-inline-icon pen"
+                      role="button"
+                      aria-label="탭 이름 수정"
+                      title="탭 이름 수정"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMainTabLabelDraft(mainTabLabel);
+                        setIsTabEditModalOpen(true);
+                      }}
+                    />
+                    <span
+                      className="main-tab-inline-icon trash"
+                      role="button"
+                      aria-label="탭 삭제"
+                      title="탭 삭제"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsTabDeleteConfirmOpen(true);
+                      }}
+                    />
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className="main-tab plus"
+                onClick={() => setIsAddTabModalOpen(true)}
+                aria-label="새 탭"
+                title="추가"
+              >
+                +
+              </button>
+            </div>
+            <div className="main-tabs-actions">
+              <button
+                type="button"
+                className="main-tab-action"
+                onClick={() => setIsShortcutOpen(true)}
+                aria-label="단축키"
+                title="단축키"
+              >
+                <svg className="main-tab-action-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+                  <rect x="1.8" y="3" width="12.4" height="9.8" rx="1.6" />
+                  <line x1="4.2" y1="6.1" x2="6.2" y2="6.1" />
+                  <line x1="7.2" y1="6.1" x2="9.2" y2="6.1" />
+                  <line x1="10.2" y1="6.1" x2="12.2" y2="6.1" />
+                  <line x1="4.2" y1="8.3" x2="6.2" y2="8.3" />
+                  <line x1="7.2" y1="8.3" x2="9.2" y2="8.3" />
+                  <line x1="10.2" y1="8.3" x2="12.2" y2="8.3" />
+                  <line x1="4.2" y1="10.5" x2="11.8" y2="10.5" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="main-tab-action"
+                onClick={() => setIsHelpOpen(true)}
+                aria-label="정보"
+                title="정보"
+              >
+                <span className="main-tab-help-badge" aria-hidden="true">i</span>
+              </button>
+            </div>
+          </div>
         }
         main={
           <Main
@@ -995,6 +1534,11 @@ const SpreadsheetEditor: React.FC = () => {
             onApplyBackground={applyBackgroundToSelection}
             onApplyBorder={applyBorderToSelection}
             onApplyAlignment={applyAlignmentToSelection}
+            onApplyFontFamily={applyFontFamilyToSelection}
+            onApplyFontSize={applyFontSizeToSelection}
+            onApplyFontColor={applyFontColorToSelection}
+            onApplyFontBackground={applyFontBackgroundToSelection}
+            onToggleTextStyle={toggleTextStyleToSelection}
             onCloseHeaderContextMenu={() => setHeaderContextMenu(null)}
             isHelpOpen={isHelpOpen}
             isShortcutOpen={isShortcutOpen}
@@ -1011,6 +1555,19 @@ const SpreadsheetEditor: React.FC = () => {
         rnb={
           <RNB
             inspectedElement={inspectedElement}
+            cellQuickMenu={cellQuickMenu}
+            onCellToggleTextStyle={toggleTextStyleToSelection}
+            onCellAlign={applyAlignmentToSelection}
+            onCellBackground={applyBackgroundToSelection}
+            onCellBorder={applyBorderToSelection}
+            onCellFontSize={applyFontSizeToSelection}
+            onCellFontColor={applyFontColorToSelection}
+            onCellFontBackground={applyFontBackgroundToSelection}
+            onAddRow={handleAddRow}
+            onAddCol={handleAddCol}
+            onDeleteRow={handleDeleteRow}
+            onDeleteCol={handleDeleteCol}
+            onClearSelectionContents={clearSelectionContents}
             rnbOpenSections={rnbOpenSections}
             onToggleSection={toggleRnbSection}
             onFieldChange={handleRnbFieldChange}
@@ -1020,18 +1577,93 @@ const SpreadsheetEditor: React.FC = () => {
           />
         }
       />
+      {isAddTabModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsAddTabModalOpen(false)}>
+          <div className="modal modal-square-actions" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">새 탭 추가</h3>
+              <button className="modal-close" onClick={() => setIsAddTabModalOpen(false)} aria-label="닫기">×</button>
+            </div>
+            <div className="modal-body">
+              <div className="square-action-grid">
+                <button type="button" className="square-action-button">본문</button>
+                <button type="button" className="square-action-button">머리말</button>
+                <button type="button" className="square-action-button">꼬리말</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isTabEditModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsTabEditModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">탭 이름 수정</h3>
+              <button className="modal-close" onClick={() => setIsTabEditModalOpen(false)} aria-label="닫기">×</button>
+            </div>
+            <div className="modal-body">
+              <input
+                className="main-tab-modal-input"
+                type="text"
+                value={mainTabLabelDraft}
+                onChange={(e) => setMainTabLabelDraft(e.target.value)}
+                autoFocus
+              />
+              <div className="main-tab-modal-actions">
+                <button
+                  type="button"
+                  className="main-tab-modal-button primary"
+                  onClick={() => {
+                    setMainTabLabel(mainTabLabelDraft.trim() || '본문');
+                    setIsTabEditModalOpen(false);
+                  }}
+                >
+                  확인
+                </button>
+                <button
+                  type="button"
+                  className="main-tab-modal-button"
+                  onClick={() => setIsTabEditModalOpen(false)}
+                >
+                  취소
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isTabDeleteConfirmOpen && (
+        <div className="modal-overlay" onClick={() => setIsTabDeleteConfirmOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">확인</h3>
+              <button className="modal-close" onClick={() => setIsTabDeleteConfirmOpen(false)} aria-label="닫기">×</button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-text">삭제하시겠습니까?</p>
+              <div className="main-tab-modal-actions">
+                <button
+                  type="button"
+                  className="main-tab-modal-button danger"
+                  onClick={() => setIsTabDeleteConfirmOpen(false)}
+                >
+                  삭제
+                </button>
+                <button
+                  type="button"
+                  className="main-tab-modal-button"
+                  onClick={() => setIsTabDeleteConfirmOpen(false)}
+                >
+                  취소
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <SheetPreview cells={cells} colWidths={colWidths} rowHeights={rowHeights} />
     </>
   );
 };
 
 export default SpreadsheetEditor;
-
-
-
-
-
-
-
-
-

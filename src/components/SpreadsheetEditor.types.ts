@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export interface CellBorder {
   top?: boolean;
   right?: boolean;
@@ -12,6 +14,7 @@ export type VerticalAlign = 'top' | 'middle' | 'bottom';
 export interface Cell {
   id: string;
   value: string;
+  richTextHtml?: string;
   rowSpan?: number;
   colSpan?: number;
   isMerged?: boolean;
@@ -20,6 +23,13 @@ export interface Cell {
   border?: CellBorder;
   horizontalAlign?: HorizontalAlign;
   verticalAlign?: VerticalAlign;
+  fontFamily?: string;
+  fontSize?: string;
+  fontColor?: string;
+  fontBackground?: string;
+  bold?: boolean;
+  italic?: boolean;
+  strikeThrough?: boolean;
   elements?: Array<{
     id: string;
     type: string;
@@ -66,7 +76,7 @@ export interface LnbGroup {
   title: string;
   items: Array<{
     id: string;
-    icon: string;
+    icon: ReactNode;
     label: string;
     action?: () => void;
   }>;

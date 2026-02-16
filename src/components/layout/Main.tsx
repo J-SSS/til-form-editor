@@ -47,6 +47,11 @@ interface MainProps {
   onApplyBackground: (color: string) => void;
   onApplyBorder: (mode: BorderMode) => void;
   onApplyAlignment: (axis: 'horizontal' | 'vertical', value: HorizontalAlign | VerticalAlign) => void;
+  onApplyFontFamily: (fontFamily: string) => void;
+  onApplyFontSize: (fontSize: string) => void;
+  onApplyFontColor: (fontColor: string) => void;
+  onApplyFontBackground: (fontBackground: string) => void;
+  onToggleTextStyle: (style: 'bold' | 'italic' | 'strikeThrough') => void;
   onCloseHeaderContextMenu: () => void;
   isHelpOpen: boolean;
   isShortcutOpen: boolean;
@@ -106,6 +111,11 @@ const Main: React.FC<MainProps> = ({
   onApplyBackground,
   onApplyBorder,
   onApplyAlignment,
+  onApplyFontFamily,
+  onApplyFontSize,
+  onApplyFontColor,
+  onApplyFontBackground,
+  onToggleTextStyle,
   onCloseHeaderContextMenu,
   isHelpOpen,
   isShortcutOpen,
@@ -118,6 +128,92 @@ const Main: React.FC<MainProps> = ({
   onCloseElementModal,
   onCloseSettings,
 }) => {
+  const RULER_SCROLLBAR_GUTTER = 16;
+  const rulerContentWidth = Math.max(0, totalColWidth - RULER_SCROLLBAR_GUTTER);
+  const focusCell = cells[minSelRow]?.[minSelCol];
+  const selectedFontFamily = focusCell?.fontFamily || 'Hanjin Group Sans';
+  const selectedFontSize = focusCell?.fontSize || '12px';
+  const selectedFontColor = focusCell?.fontColor || '#2f343b';
+  const selectedFontBackground = focusCell?.fontBackground || '#ffffff';
+  const fontColorInputRef = React.useRef<HTMLInputElement | null>(null);
+  const fontBgInputRef = React.useRef<HTMLInputElement | null>(null);
+  const activeEditorRef = React.useRef<HTMLDivElement | null>(null);
+  const savedRangeRef = React.useRef<Range | null>(null);
+
+  React.useEffect(() => {
+    if (!editingCell) return;
+    const onSelectionChange = () => {
+      const editor = activeEditorRef.current;
+      if (!editor) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (!editor.contains(range.commonAncestorContainer)) return;
+      savedRangeRef.current = range.cloneRange();
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, [editingCell]);
+
+  const restoreEditorSelection = () => {
+    const editor = activeEditorRef.current;
+    if (!editor) return false;
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel) return false;
+    sel.removeAllRanges();
+    if (savedRangeRef.current) {
+      sel.addRange(savedRangeRef.current);
+      return true;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    sel.addRange(range);
+    return true;
+  };
+
+  const resolveElementIdFromTarget = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return null;
+    const elementNode = target.closest('[data-element-id]') as HTMLElement | null;
+    return elementNode?.dataset.elementId || null;
+  };
+
+  const applyInlineCommand = (command: 'bold' | 'italic' | 'strikeThrough') => {
+    if (!restoreEditorSelection()) return false;
+    document.execCommand(command, false);
+    if (activeEditorRef.current) onEditingValueChange(activeEditorRef.current.innerHTML);
+    return true;
+  };
+
+  const applyInlineCssStyle = (styleName: keyof CSSStyleDeclaration, styleValue: string) => {
+    const editor = activeEditorRef.current;
+    if (!editor) return false;
+    if (!restoreEditorSelection()) return false;
+    const selectionObj = window.getSelection();
+    if (!selectionObj || selectionObj.rangeCount === 0) return false;
+    const range = selectionObj.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) return false;
+
+    const wrapper = document.createElement('span');
+    (wrapper.style[styleName] as unknown as string) = styleValue;
+    if (range.collapsed) {
+      wrapper.appendChild(document.createTextNode('\u200B'));
+      range.insertNode(wrapper);
+      range.setStart(wrapper.firstChild as Node, 1);
+      range.collapse(true);
+    } else {
+      wrapper.appendChild(range.extractContents());
+      range.insertNode(wrapper);
+      selectionObj.removeAllRanges();
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(wrapper);
+      selectionObj.addRange(nextRange);
+    }
+    onEditingValueChange(editor.innerHTML);
+    return true;
+  };
+
   const renderBorderIcon = (mode: BorderMode) => {
     const common = { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', stroke: '#1f2a38', strokeWidth: 1.6 };
     if (mode === 'all') {
@@ -242,8 +338,7 @@ const Main: React.FC<MainProps> = ({
             <div className="ribbon-header-group">테이블</div>
             <div className="ribbon-header-group">정렬</div>
             <div className="ribbon-header-group">글꼴</div>
-            <div className="ribbon-header-group">단락</div>
-            <div className="ribbon-header-group">편집</div>
+            <div className="ribbon-header-group">정보</div>
           </div>
 
           <div className="ribbon-body">
@@ -276,32 +371,116 @@ const Main: React.FC<MainProps> = ({
             </div>
 
             <div className="ribbon-group ribbon-group-font">
-              <select className="ribbon-select" defaultValue="Hanjin Group Sans"><option>Hanjin Group Sans</option></select>
-              <select className="ribbon-size" defaultValue="8pt"><option>8pt</option><option>10pt</option><option>12pt</option></select>
-              <button className="ribbon-text-button" title="굵게">B</button>
-              <button className="ribbon-text-button" title="기울임">I</button>
-              <button className="ribbon-text-button" title="밑줄">U</button>
-            </div>
-
-            <div className="ribbon-group ribbon-group-paragraph">
-              <button className="ribbon-icon-button" title="위쪽">↑</button>
-              <button className="ribbon-icon-button" title="가운데">↕</button>
-              <button className="ribbon-icon-button" title="아래쪽">↓</button>
+              <div className="font-controls-row">
+                <select
+                  className="ribbon-select"
+                  value={selectedFontFamily}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (!applyInlineCssStyle('fontFamily', value)) onApplyFontFamily(value);
+                  }}
+                >
+                  <option>Hanjin Group Sans</option>
+                  <option>Malgun Gothic</option>
+                  <option>Nanum Gothic</option>
+                  <option>Noto Sans KR</option>
+                  <option>Arial</option>
+                  <option>Times New Roman</option>
+                </select>
+                <select
+                  className="ribbon-size"
+                  value={selectedFontSize}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (!applyInlineCssStyle('fontSize', value)) onApplyFontSize(value);
+                  }}
+                >
+                  {['8px', '9px', '10px', '11px', '12px', '14px', '16px', '18px', '20px', '24px', '28px', '32px', '36px', '48px', '64px', '72px', '96px'].map((size) => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="font-controls-row">
+                <button className="ribbon-text-button" title="굵게" onClick={() => { if (!applyInlineCommand('bold')) onToggleTextStyle('bold'); }}>B</button>
+                <button className="ribbon-icon-button" title="이탤릭" onClick={() => { if (!applyInlineCommand('italic')) onToggleTextStyle('italic'); }}>
+                  <svg className="text-style-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#1f2a38" strokeWidth="1.6" aria-hidden="true">
+                    <line x1="10.5" y1="2.5" x2="5.5" y2="13.5" />
+                    <line x1="4.5" y1="2.5" x2="12.5" y2="2.5" />
+                    <line x1="3.5" y1="13.5" x2="11.5" y2="13.5" />
+                  </svg>
+                </button>
+                <button className="ribbon-icon-button" title="취소선" onClick={() => { if (!applyInlineCommand('strikeThrough')) onToggleTextStyle('strikeThrough'); }}>
+                  <svg className="text-style-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#1f2a38" strokeWidth="1.4" aria-hidden="true">
+                    <path d="M12.6 4.8C12 3.9 10.8 3.4 9.3 3.4C7.2 3.4 5.8 4.3 5.8 5.6C5.8 6.8 7 7.3 8.8 7.7C10.7 8.1 12.2 8.7 12.2 10.3C12.2 12 10.5 13 8 13C6 13 4.4 12.2 3.6 10.8" />
+                    <line x1="2.2" y1="8" x2="13.8" y2="8" />
+                  </svg>
+                </button>
+                <button
+                  className="ribbon-icon-button"
+                  title="폰트 색상"
+                  onClick={() => fontColorInputRef.current?.click()}
+                >
+                  <svg className="text-style-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#1f2a38" strokeWidth="1.4" aria-hidden="true">
+                    <path d="M5.2 12.5L8 4.5L10.8 12.5" />
+                    <line x1="6" y1="10" x2="10" y2="10" />
+                    <line x1="3" y1="14" x2="13" y2="14" stroke={selectedFontColor} strokeWidth="2.4" />
+                  </svg>
+                </button>
+                <button
+                  className="ribbon-icon-button"
+                  title="폰트 배경"
+                  onClick={() => fontBgInputRef.current?.click()}
+                >
+                  <svg className="text-style-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#1f2a38" strokeWidth="1.4" aria-hidden="true">
+                    <rect x="2.5" y="9.5" width="11" height="4" rx="1" fill={selectedFontBackground} stroke="#8da0b3" />
+                    <path d="M5.2 8.4L8 3.6L10.8 8.4" />
+                    <line x1="6.1" y1="7.2" x2="9.9" y2="7.2" />
+                  </svg>
+                </button>
+                <input
+                  ref={fontColorInputRef}
+                  type="color"
+                  className="hidden-color-input"
+                  value={selectedFontColor}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (!applyInlineCssStyle('color', value)) onApplyFontColor(value);
+                  }}
+                />
+                <input
+                  ref={fontBgInputRef}
+                  type="color"
+                  className="hidden-color-input"
+                  value={selectedFontBackground}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (!applyInlineCssStyle('backgroundColor', value)) onApplyFontBackground(value);
+                  }}
+                />
+              </div>
             </div>
 
             <div className="ribbon-group ribbon-group-edit">
-              <button className="ribbon-icon-button" onClick={onOpenShortcut} aria-label="단축키">?</button>
-              <button className="ribbon-icon-button" onClick={onOpenHelp} aria-label="도움말">?</button>
+              <button className="ribbon-icon-button" onClick={onOpenShortcut} aria-label="단축키" title="단축키">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#1f2a38" strokeWidth="1.3" aria-hidden="true">
+                  <rect x="1.8" y="3" width="12.4" height="9.8" rx="1.6" />
+                  <line x1="4.2" y1="6.1" x2="6.2" y2="6.1" />
+                  <line x1="7.2" y1="6.1" x2="9.2" y2="6.1" />
+                  <line x1="10.2" y1="6.1" x2="12.2" y2="6.1" />
+                  <line x1="4.2" y1="8.3" x2="6.2" y2="8.3" />
+                  <line x1="7.2" y1="8.3" x2="9.2" y2="8.3" />
+                  <line x1="10.2" y1="8.3" x2="12.2" y2="8.3" />
+                  <line x1="4.2" y1="10.5" x2="11.8" y2="10.5" />
+                </svg>
+              </button>
+              <button className="ribbon-icon-button" onClick={onOpenHelp} aria-label="정보" title="정보">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#1f2a38" strokeWidth="1.4" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6" />
+                  <line x1="8" y1="7" x2="8" y2="11.2" />
+                  <circle cx="8" cy="4.8" r="0.75" fill="#1f2a38" stroke="none" />
+                </svg>
+              </button>
             </div>
-          </div>
-
-          <div className="toolbar-info">
-            <span className="toolbar-selection-info">
-              선택: {Math.min(selection.startRow, selection.endRow) + 1}행 {Math.min(selection.startCol, selection.endCol) + 1}열
-              {selection.startRow !== selection.endRow || selection.startCol !== selection.endCol
-                ? ` - ${Math.max(selection.startRow, selection.endRow) + 1}행 ${Math.max(selection.startCol, selection.endCol) + 1}열`
-                : ''}
-            </span>
           </div>
           <div className="toolbar-actions">
             <button className="help-button" onClick={onOpenDoc} aria-label="문서">Doc</button>
@@ -310,9 +489,8 @@ const Main: React.FC<MainProps> = ({
 
         <div className="ruler-row" style={{ width: '100%' }}>
           <div className="ruler-corner">
-            <button className="ruler-corner-button" aria-label="ruler-start"></button>
           </div>
-          <div className="spreadsheet-ruler" style={{ width: `${totalColWidth}px` }}>
+          <div className="spreadsheet-ruler" style={{ width: `${rulerContentWidth}px` }}>
             <div className="ruler-left-boundary"></div>
             {rulerMarks.map((mark) => {
               const isMajor = mark % 10 === 0;
@@ -329,6 +507,7 @@ const Main: React.FC<MainProps> = ({
             })}
             <div className="ruler-right-boundary"></div>
           </div>
+          <div className="ruler-scrollbar-gutter" style={{ width: `${RULER_SCROLLBAR_GUTTER}px` }}></div>
         </div>
         <div className="spreadsheet-wrapper" style={{ width: '100%', minWidth: '100%', maxWidth: '100%' }}>
           <table ref={tableRef} className="spreadsheet-table">
@@ -353,6 +532,13 @@ const Main: React.FC<MainProps> = ({
                     const edgeRight = isSelected && colIndex === maxSelCol;
                     const horizontalAlign = cell.horizontalAlign || 'left';
                     const verticalAlign = cell.verticalAlign || 'middle';
+                    const fontFamily = cell.fontFamily || 'Hanjin Group Sans';
+                    const fontSize = cell.fontSize || '12px';
+                    const fontColor = cell.fontColor || '#2f343b';
+                    const fontBackground = cell.fontBackground;
+                    const fontWeight = cell.bold ? 700 : 400;
+                    const fontStyle = cell.italic ? 'italic' : 'normal';
+                    const textDecoration = cell.strikeThrough ? 'line-through' : 'none';
                     const contentAlignItems =
                       verticalAlign === 'top' ? 'flex-start' : verticalAlign === 'bottom' ? 'flex-end' : 'center';
                     const contentJustifyContent =
@@ -388,21 +574,77 @@ const Main: React.FC<MainProps> = ({
                           height: rowHeights[rowIndex],
                           maxHeight: rowHeights[rowIndex],
                         }}
-                        onMouseDown={(e) => onCellMouseDown(e, rowIndex, colIndex)}
-                        onClick={() => onCellClick(rowIndex, colIndex)}
-                        onMouseEnter={() => onCellMouseEnter(rowIndex, colIndex)}
+                        onMouseDown={(e) => {
+                          if (isEditing) return;
+                          const elementId = resolveElementIdFromTarget(e.target);
+                          if (elementId) return;
+                          onCellMouseDown(e, rowIndex, colIndex);
+                        }}
+                        onClick={(e) => {
+                          if (isEditing) return;
+                          const elementId = resolveElementIdFromTarget(e.target);
+                          if (elementId) {
+                            onElementClick(e, rowIndex, colIndex, elementId);
+                            return;
+                          }
+                          onCellClick(rowIndex, colIndex);
+                        }}
+                        onMouseEnter={() => {
+                          if (isEditing) return;
+                          onCellMouseEnter(rowIndex, colIndex);
+                        }}
                         onDoubleClick={() => onCellDoubleClick(rowIndex, colIndex)}
                       >
                         {isEditing ? (
-                          <input
-                            type="text"
-                            className="cell-input"
-                            value={editingValue}
-                            onChange={(e) => onEditingValueChange(e.target.value)}
-                            onBlur={onCellEditComplete}
+                          <div
+                            className="cell-editor"
+                            contentEditable
+                            suppressContentEditableWarning
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              const elementId = resolveElementIdFromTarget(e.target);
+                              if (!elementId) return;
+                              onElementClick(e, rowIndex, colIndex, elementId);
+                            }}
+                            onInput={(e) => onEditingValueChange(e.currentTarget.innerHTML)}
+                            onBlur={() => {
+                              requestAnimationFrame(() => {
+                                const target = document.activeElement as HTMLElement | null;
+                                if (target?.closest('.rnb-panel')) return;
+                                activeEditorRef.current = null;
+                                onCellEditComplete();
+                              });
+                            }}
+                            onFocus={(e) => {
+                              activeEditorRef.current = e.currentTarget;
+                            }}
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') onCellEditComplete();
-                              else if (e.key === 'Escape') onEditingCancel();
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onCellEditComplete();
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onEditingCancel();
+                              }
+                            }}
+                            ref={(el) => {
+                              if (!el) return;
+                              const editKey = `${rowIndex}-${colIndex}`;
+                              if (el.dataset.editKey === editKey && el.innerHTML === editingValue) return;
+                              if (el.innerHTML !== editingValue) el.innerHTML = editingValue;
+                              el.dataset.editKey = editKey;
+                              activeEditorRef.current = el;
+                              requestAnimationFrame(() => {
+                                el.focus();
+                                const range = document.createRange();
+                                range.selectNodeContents(el);
+                                range.collapse(false);
+                                const sel = window.getSelection();
+                                sel?.removeAllRanges();
+                                sel?.addRange(range);
+                              });
                             }}
                             style={
                               hasCustomBorder
@@ -410,10 +652,15 @@ const Main: React.FC<MainProps> = ({
                                     outline: 'none',
                                     boxShadow: 'inset 0 0 0 2px #1a73e8',
                                     textAlign: horizontalAlign,
+                                    fontFamily,
+                                    fontSize,
+                                    color: fontColor,
+                                    fontWeight,
+                                    fontStyle,
+                                    textDecoration,
                                   }
-                                : { textAlign: horizontalAlign }
+                                : { textAlign: horizontalAlign, fontFamily, fontSize, color: fontColor, fontWeight, fontStyle, textDecoration }
                             }
-                            autoFocus
                           />
                         ) : (
                           <div
@@ -422,24 +669,21 @@ const Main: React.FC<MainProps> = ({
                               alignItems: contentAlignItems,
                               justifyContent: contentJustifyContent,
                               textAlign: horizontalAlign,
+                              fontFamily,
+                              fontSize,
                             }}
                           >
-                            {(cell.elements || []).length > 0 && (
-                              <div className="cell-elements">
-                                {(cell.elements || []).map((item) => (
-                                  <button
-                                    key={item.id}
-                                    type="button"
-                                    className="cell-element"
-                                    onClick={(e) => onElementClick(e, rowIndex, colIndex, item.id)}
-                                    onDoubleClick={(e) => e.stopPropagation()}
-                                  >
-                                    {item.label}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            {cell.value ? <span className="cell-text">{cell.value}</span> : null}
+                            {cell.richTextHtml ? (
+                              <span
+                                className="cell-text"
+                                style={{ color: fontColor, backgroundColor: fontBackground, fontWeight, fontStyle, textDecoration }}
+                                dangerouslySetInnerHTML={{ __html: cell.richTextHtml }}
+                              />
+                            ) : (cell.value || '').trim() ? (
+                              <span className="cell-text" style={{ color: fontColor, backgroundColor: fontBackground, fontWeight, fontStyle, textDecoration }}>
+                                {(cell.value || '').trim()}
+                              </span>
+                            ) : null}
                           </div>
                         )}
                       </td>
@@ -449,6 +693,17 @@ const Main: React.FC<MainProps> = ({
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="editor-status-bar">
+          <div className="editor-status-pill">
+            <span className="editor-status-title">선택 셀</span>
+            <span className="editor-status-value">
+              {Math.min(selection.startRow, selection.endRow) + 1}행 {Math.min(selection.startCol, selection.endCol) + 1}열
+              {selection.startRow !== selection.endRow || selection.startCol !== selection.endCol
+                ? ` - ${Math.max(selection.startRow, selection.endRow) + 1}행 ${Math.max(selection.startCol, selection.endCol) + 1}열`
+                : ''}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -488,11 +743,12 @@ const Main: React.FC<MainProps> = ({
         <div className="modal-overlay" onClick={onCloseHelp}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">도움말</h3>
+              <h3 className="modal-title">정보</h3>
               <button className="modal-close" onClick={onCloseHelp} aria-label="닫기">×</button>
             </div>
             <div className="modal-body">
-              <p className="modal-text">셀 선택/편집/병합 기능을 사용할 수 있습니다.</p>
+              <p className="modal-text">결재 양식 메이커입니다. v0.1</p>
+              <p className="modal-text">기능 문의 및 의견 : test@test.com</p>
             </div>
           </div>
         </div>

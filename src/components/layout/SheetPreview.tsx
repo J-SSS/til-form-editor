@@ -38,7 +38,7 @@ const isActionElementType = (type: string) => {
 // 요소 타입에 따라 미리보기 HTML 태그(또는 칩)를 생성합니다.
 const renderElementPreviewHtml = (type: string, label: string, placeholder?: string) => {
   const safeLabel = escapeHtml(label);
-  const safePlaceholder = escapeHtml(placeholder || label);
+  const safePlaceholder = escapeHtml(placeholder || '');
   if (isActionElementType(type)) {
     return `<button type="button" class="element-control element-action-button">버튼</button>`;
   }
@@ -84,6 +84,13 @@ const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: numb
           const height = rowHeights.slice(rowIndex, rowIndex + spanRows).reduce((sum, value) => sum + value, 0);
           const horizontalAlign = cell.horizontalAlign || 'left';
           const verticalAlign = cell.verticalAlign || 'middle';
+          const fontFamily = cell.fontFamily || 'Hanjin Group Sans';
+          const fontSize = cell.fontSize || '12px';
+          const fontColor = cell.fontColor || '#2f343b';
+          const fontBackground = cell.fontBackground || 'transparent';
+          const fontWeight = cell.bold ? '700' : '400';
+          const fontStyle = cell.italic ? 'italic' : 'normal';
+          const textDecoration = cell.strikeThrough ? 'line-through' : 'none';
           const alignItems =
             horizontalAlign === 'left' ? 'flex-start' : horizontalAlign === 'right' ? 'flex-end' : 'center';
           const justifyContent =
@@ -94,6 +101,8 @@ const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: numb
             `min-width:${width}px`,
             `height:${height}px`,
             `background:${cell.background || '#ffffff'}`,
+            `font-family:${fontFamily}`,
+            `font-size:${fontSize}`,
             `border-top:${cell.border?.top === true ? '1px solid #000000' : 'none'}`,
             `border-right:${cell.border?.right === true ? '1px solid #000000' : 'none'}`,
             `border-bottom:${cell.border?.bottom === true ? '1px solid #000000' : 'none'}`,
@@ -102,13 +111,22 @@ const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: numb
 
           const rowSpanAttr = spanRows > 1 ? ` rowspan="${spanRows}"` : '';
           const colSpanAttr = spanCols > 1 ? ` colspan="${spanCols}"` : '';
-          const text = escapeHtml(cell.value || '').replace(/\n/g, '<br />');
+          const hasRichText = Boolean(cell.richTextHtml && cell.richTextHtml.length > 0);
+          const text = hasRichText
+            ? (cell.richTextHtml || '')
+            : escapeHtml(cell.value || '').replace(/\n/g, '<br />');
 
-          const elementsHtml = (cell.elements || [])
-            .map((element) => renderElementPreviewHtml(element.type, element.label, element.placeholder))
-            .join('');
+          const elementsHtml = hasRichText
+            ? ''
+            : (cell.elements || [])
+                .map((element) => renderElementPreviewHtml(element.type, element.label, element.placeholder))
+                .join('');
 
-          return `<td${rowSpanAttr}${colSpanAttr} style="${styleParts.join(';')}"><div class="cell-inner" style="align-items:${alignItems};justify-content:${justifyContent};text-align:${horizontalAlign}"><div class="chip-row" style="justify-content:${alignItems}">${elementsHtml}</div><div class="text">${text || '&nbsp;'}</div></div></td>`;
+          const chipRow = elementsHtml
+            ? `<div class="chip-row" style="justify-content:${alignItems}">${elementsHtml}</div>`
+            : '';
+
+          return `<td${rowSpanAttr}${colSpanAttr} style="${styleParts.join(';')}"><div class="cell-inner" style="align-items:${alignItems};justify-content:${justifyContent};text-align:${horizontalAlign}">${chipRow}<div class="text" style="color:${fontColor};background:${fontBackground};font-weight:${fontWeight};font-style:${fontStyle};text-decoration:${textDecoration}">${text || '&nbsp;'}</div></div></td>`;
         })
         .join('');
       return `<tr>${rowCells}</tr>`;
@@ -230,7 +248,7 @@ const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: numb
       color: #f3f8ff;
     }
     .text {
-      font-size: 13px;
+      font-size: inherit;
       line-height: 1.4;
       white-space: pre-wrap;
       word-break: break-word;
