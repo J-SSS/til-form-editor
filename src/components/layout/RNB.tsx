@@ -3,12 +3,14 @@ import { BorderMode, HorizontalAlign, InspectedElement, RnbOpenSections, Vertica
 
 interface CellQuickMenuState {
   selectionLabel: string;
+  selectionInfo: string;
   bold: boolean;
   italic: boolean;
   strikeThrough: boolean;
   horizontalAlign: HorizontalAlign;
   verticalAlign: VerticalAlign;
   background: string;
+  fontFamily: string;
   fontSize: string;
   fontColor: string;
   fontBackground: string;
@@ -16,11 +18,15 @@ interface CellQuickMenuState {
 
 interface RNBProps {
   inspectedElement: InspectedElement | null;
+  isCellEditing: boolean;
+  canMergeCells: boolean;
+  canUnmergeCells: boolean;
   cellQuickMenu: CellQuickMenuState;
   onCellToggleTextStyle: (style: 'bold' | 'italic' | 'strikeThrough') => void;
   onCellAlign: (axis: 'horizontal' | 'vertical', value: HorizontalAlign | VerticalAlign) => void;
   onCellBackground: (color: string) => void;
   onCellBorder: (mode: BorderMode) => void;
+  onCellFontFamily: (fontFamily: string) => void;
   onCellFontSize: (fontSize: string) => void;
   onCellFontColor: (fontColor: string) => void;
   onCellFontBackground: (fontBackground: string) => void;
@@ -28,6 +34,8 @@ interface RNBProps {
   onAddCol: () => void;
   onDeleteRow: () => void;
   onDeleteCol: () => void;
+  onMergeCells: () => void;
+  onUnmergeCells: () => void;
   onClearSelectionContents: () => void;
   rnbOpenSections: RnbOpenSections;
   onToggleSection: (key: keyof RnbOpenSections) => void;
@@ -39,11 +47,15 @@ interface RNBProps {
 
 const RNB: React.FC<RNBProps> = ({
   inspectedElement,
+  isCellEditing,
+  canMergeCells,
+  canUnmergeCells,
   cellQuickMenu,
   onCellToggleTextStyle,
   onCellAlign,
   onCellBackground,
   onCellBorder,
+  onCellFontFamily,
   onCellFontSize,
   onCellFontColor,
   onCellFontBackground,
@@ -51,6 +63,8 @@ const RNB: React.FC<RNBProps> = ({
   onAddCol,
   onDeleteRow,
   onDeleteCol,
+  onMergeCells,
+  onUnmergeCells,
   onClearSelectionContents,
   rnbOpenSections,
   onToggleSection,
@@ -67,17 +81,44 @@ const RNB: React.FC<RNBProps> = ({
     return (
       <div className="rnb-panel rnb-cell-panel">
         <div className="rnb-cell-header">
-          <span className="rnb-cell-header-icon" aria-hidden="true">⚙</span>
-          <span className="rnb-cell-header-title">셀 속성 ({cellQuickMenu.selectionLabel})</span>
+          <span className="rnb-cell-header-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="3.1" />
+              <path d="M12 3.7v2.2" />
+              <path d="M12 18.1v2.2" />
+              <path d="m5.8 6 1.6 1.6" />
+              <path d="m16.6 16.8 1.6 1.6" />
+              <path d="M3.7 12h2.2" />
+              <path d="M18.1 12h2.2" />
+              <path d="m5.8 18 1.6-1.6" />
+              <path d="m16.6 7.2 1.6-1.6" />
+            </svg>
+          </span>
+          <div className="rnb-cell-header-text">
+            <span className="rnb-cell-header-title">셀 속성 ({cellQuickMenu.selectionLabel})</span>
+            <span className="rnb-cell-header-selection">{cellQuickMenu.selectionInfo}</span>
+          </div>
+        </div>
+
+        <div className="rnb-cell-block">
+          <label className="rnb-label">셀 병합</label>
+          <div className="rnb-mini-actions">
+            <button type="button" className="rnb-mini-btn" onClick={onMergeCells} title="셀 병합" disabled={isCellEditing || !canMergeCells}>
+              병합
+            </button>
+            <button type="button" className="rnb-mini-btn" onClick={onUnmergeCells} title="셀 병합 해제" disabled={isCellEditing || !canUnmergeCells}>
+              해제
+            </button>
+          </div>
         </div>
 
         <div className="rnb-cell-block">
           <label className="rnb-label">셀 추가, 삭제</label>
           <div className="rnb-mini-actions">
-            <button type="button" className="rnb-mini-btn" onClick={onAddRow}>행 +</button>
-            <button type="button" className="rnb-mini-btn" onClick={onAddCol}>열 +</button>
-            <button type="button" className="rnb-mini-btn" onClick={onDeleteRow}>행 -</button>
-            <button type="button" className="rnb-mini-btn" onClick={onDeleteCol}>열 -</button>
+            <button type="button" className="rnb-mini-btn" onClick={onAddRow} disabled={isCellEditing}>행 +</button>
+            <button type="button" className="rnb-mini-btn" onClick={onAddCol} disabled={isCellEditing}>열 +</button>
+            <button type="button" className="rnb-mini-btn" onClick={onDeleteRow} disabled={isCellEditing}>행 -</button>
+            <button type="button" className="rnb-mini-btn" onClick={onDeleteCol} disabled={isCellEditing}>열 -</button>
           </div>
         </div>
 
@@ -85,29 +126,29 @@ const RNB: React.FC<RNBProps> = ({
           <label className="rnb-label">셀  테두리</label>
           <div className="rnb-border-stack">
             <div className="rnb-border-row rnb-border-row-2">
-              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('all')} title="전체 테두리">
+              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('all')} title="전체 테두리" disabled={isCellEditing}>
                 <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" /><line x1="8" y1="2" x2="8" y2="14" /><line x1="2" y1="8" x2="14" y2="8" /></svg>
               </button>
-              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('outer')} title="외곽 테두리">
+              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('outer')} title="외곽 테두리" disabled={isCellEditing}>
                 <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" /></svg>
               </button>
             </div>
             <div className="rnb-border-row rnb-border-row-4">
-              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('top')} title="상단 테두리">
+              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('top')} title="상단 테두리" disabled={isCellEditing}>
                 <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" strokeOpacity="0.35" /><line x1="2" y1="2" x2="14" y2="2" /></svg>
               </button>
-              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('bottom')} title="하단 테두리">
+              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('bottom')} title="하단 테두리" disabled={isCellEditing}>
                 <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" strokeOpacity="0.35" /><line x1="2" y1="14" x2="14" y2="14" /></svg>
               </button>
-              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('left')} title="왼쪽 테두리">
+              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('left')} title="왼쪽 테두리" disabled={isCellEditing}>
                 <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" strokeOpacity="0.35" /><line x1="2" y1="2" x2="2" y2="14" /></svg>
               </button>
-              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('right')} title="오른쪽 테두리">
+              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('right')} title="오른쪽 테두리" disabled={isCellEditing}>
                 <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" strokeOpacity="0.35" /><line x1="14" y1="2" x2="14" y2="14" /></svg>
               </button>
             </div>
             <div className="rnb-border-row rnb-border-row-1">
-              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('none')} title="테두리 제거">
+              <button type="button" className="rnb-border-btn" onClick={() => onCellBorder('none')} title="테두리 제거" disabled={isCellEditing}>
                 <svg viewBox="0 0 16 16" aria-hidden="true">
                   <rect x="2" y="2" width="12" height="12" stroke="#b8c2ce" />
                   <line x1="3" y1="13" x2="13" y2="3" stroke="#e03131" strokeWidth="1.7" />
@@ -148,6 +189,15 @@ const RNB: React.FC<RNBProps> = ({
           <label className="rnb-label">폰트</label>
           <div className="rnb-font-row">
             <select
+              className="rnb-font-family"
+              value={cellQuickMenu.fontFamily}
+              onChange={(e) => onCellFontFamily(e.target.value)}
+            >
+              {['Noto Sans KR', 'Malgun Gothic', 'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Courier New'].map((family) => (
+                <option key={family} value={family}>{family}</option>
+              ))}
+            </select>
+            <select
               className="rnb-font-size"
               value={cellQuickMenu.fontSize}
               onChange={(e) => onCellFontSize(e.target.value)}
@@ -156,22 +206,32 @@ const RNB: React.FC<RNBProps> = ({
                 <option key={size} value={size}>{size}</option>
               ))}
             </select>
+          </div>
+          <div className="rnb-font-row">
             <button
               type="button"
               className="rnb-font-color-btn"
               onClick={() => fontColorInputRef.current?.click()}
-              style={{ color: cellQuickMenu.fontColor }}
               title="글자색"
             >
-              A
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M5.2 12.4L8 4.4L10.8 12.4" />
+                <line x1="6.1" y1="10" x2="9.9" y2="10" />
+                <line x1="3.2" y1="14" x2="12.8" y2="14" style={{ stroke: cellQuickMenu.fontColor, strokeWidth: 2 }} />
+              </svg>
             </button>
             <button
               type="button"
               className="rnb-font-bg-btn"
               onClick={() => fontBgInputRef.current?.click()}
-              style={{ backgroundColor: cellQuickMenu.fontBackground }}
               title="글자 배경"
-            />
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M5.2 8.4L8 3.6L10.8 8.4" />
+                <line x1="6.1" y1="7.2" x2="9.9" y2="7.2" />
+                <rect x="2.8" y="10.2" width="10.4" height="3.4" rx="0.8" fill={cellQuickMenu.fontBackground} stroke="#8da0b3" />
+              </svg>
+            </button>
             <input
               ref={fontColorInputRef}
               type="color"
@@ -287,19 +347,14 @@ const RNB: React.FC<RNBProps> = ({
 
   return (
     <div className="rnb-panel">
-      <div className="rnb-tabs">
-        <button className="rnb-tab active" type="button">Properties</button>
-        <button className="rnb-tab" type="button">Events</button>
-      </div>
-
       <div className="rnb-section">
         <button className="rnb-section-toggle" type="button" onClick={() => onToggleSection('propertiesMain')}>
-          <span className="rnb-section-title">Properties</span>
+          <span className="rnb-section-title">속성</span>
           <span className="rnb-chevron" aria-hidden="true">{rnbOpenSections.propertiesMain ? 'v' : '>'}</span>
         </button>
         {rnbOpenSections.propertiesMain && (
           <>
-            <label className="rnb-label">LABEL</label>
+            <label className="rnb-label">이름</label>
             <input
               className="rnb-input"
               value={inspectedElement.label}
@@ -338,25 +393,11 @@ const RNB: React.FC<RNBProps> = ({
       </div>
 
       <div className="rnb-section">
-        <button className="rnb-section-toggle" type="button" onClick={() => onToggleSection('events')}>
-          <span className="rnb-section-title">Events</span>
-          <span className="rnb-chevron" aria-hidden="true">{rnbOpenSections.events ? 'v' : '>'}</span>
-        </button>
-        {rnbOpenSections.events && <div className="rnb-placeholder">No events</div>}
-      </div>
-      <div className="rnb-section">
         <button className="rnb-section-toggle" type="button" onClick={() => onToggleSection('action')}>
-          <span className="rnb-section-title">Action</span>
+          <span className="rnb-section-title">스타일</span>
           <span className="rnb-chevron" aria-hidden="true">{rnbOpenSections.action ? 'v' : '>'}</span>
         </button>
-        {rnbOpenSections.action && <div className="rnb-placeholder">No action</div>}
-      </div>
-      <div className="rnb-section">
-        <button className="rnb-section-toggle" type="button" onClick={() => onToggleSection('identification')}>
-          <span className="rnb-section-title">Identification</span>
-          <span className="rnb-chevron" aria-hidden="true">{rnbOpenSections.identification ? 'v' : '>'}</span>
-        </button>
-        {rnbOpenSections.identification && <div className="rnb-placeholder">No identification</div>}
+        {rnbOpenSections.action && <div className="rnb-placeholder">스타일 옵션 준비 중</div>}
       </div>
 
       <div className="rnb-actions">

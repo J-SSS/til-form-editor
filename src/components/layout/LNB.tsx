@@ -1,5 +1,6 @@
-﻿import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import { LnbGroup } from '../SpreadsheetEditor.types';
+import { clearJsEditorPopupBridge, openJsEditorPopup } from './JsEditorPopup';
 
 type LnbTabKey = '기본 설정' | '자동 입력' | '선택 입력' | '커스텀 항목';
 
@@ -16,6 +17,8 @@ const LNB: React.FC<LNBProps> = ({ lnbTab, lnbGroups, onChangeTab, onOpenSetting
   const [formDescription, setFormDescription] = useState('');
   const [formEnabled, setFormEnabled] = useState<'yes' | 'no'>('yes');
   const [formType, setFormType] = useState<'normal' | 'linked'>('normal');
+  const jsPopupRef = useRef<Window | null>(null);
+  const jsEditorValueRef = useRef<string>('// JavaScript\n');
 
   useEffect(() => {
     setOpenSections((prev) => {
@@ -30,6 +33,20 @@ const LNB: React.FC<LNBProps> = ({ lnbTab, lnbGroups, onChangeTab, onOpenSetting
   const toggleSection = (title: string) => {
     setOpenSections((prev) => ({ ...prev, [title]: !prev[title] }));
   };
+
+  const openJsPopup = () => {
+    openJsEditorPopup({
+      popupRef: jsPopupRef,
+      editorValueRef: jsEditorValueRef,
+    });
+  };
+  const isClipButtonEnabled = lnbTab === '기본 설정' && formType === 'linked';
+
+  useEffect(() => {
+    return () => {
+      clearJsEditorPopupBridge();
+    };
+  }, []);
 
   const tabButtons: { key: LnbTabKey; label: string; icon: React.ReactNode }[] = [
     {
@@ -187,14 +204,21 @@ const LNB: React.FC<LNBProps> = ({ lnbTab, lnbGroups, onChangeTab, onOpenSetting
       </div>
 
       <div className="lnb-footer">
-        <button type="button" className="lnb-settings-button" onClick={onOpenSettings}>
-          레이아웃 설정
+        <button type="button" className="lnb-settings-button" onClick={() => window.alert('준비 중')}>
+          기본 레이아웃 설정
         </button>
-        <button type="button" className="lnb-footer-square" aria-label="알림">
-          <span aria-hidden="true">{"\u223F"}</span>
+        <button type="button" className="lnb-footer-square" aria-label="클립" disabled={!isClipButtonEnabled}>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M8.2 12.1 14.9 5.4a3 3 0 0 1 4.3 4.3l-8.1 8.1a4.6 4.6 0 1 1-6.5-6.5l8.2-8.2" />
+          </svg>
         </button>
-        <button type="button" className="lnb-footer-square" aria-label="북마크">
-          <span aria-hidden="true">{"\u25A3"}</span>
+        <button type="button" className="lnb-footer-square" aria-label="자바스크립트" onClick={openJsPopup}>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2.2" />
+            <text x="12" y="16" textAnchor="middle" fontSize="9.1" fontWeight="900" fill="currentColor" stroke="none">
+              JS
+            </text>
+          </svg>
         </button>
       </div>
     </div>

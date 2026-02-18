@@ -1,13 +1,18 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Cell } from '../SpreadsheetEditor.types';
 
-interface SheetPreviewProps {
+interface PreviewSheetData {
+  id: string;
+  label: string;
   cells: Cell[][];
   colWidths: number[];
   rowHeights: number[];
 }
 
-// srcDoc HTML에 삽입하기 전에 텍스트를 이스케이프합니다.
+interface SheetPreviewProps {
+  sheets: PreviewSheetData[];
+}
+
 const escapeHtml = (value: string) => {
   return value
     .replace(/&/g, '&amp;')
@@ -17,7 +22,6 @@ const escapeHtml = (value: string) => {
     .replace(/'/g, '&#39;');
 };
 
-// 미리보기 칩 스타일 매핑에 사용하는 요소 타입 판별 함수입니다.
 const isSelectElementType = (type: string) => {
   return type === 'select' || type === 'checkbox' || type === 'radio';
 };
@@ -35,12 +39,11 @@ const isActionElementType = (type: string) => {
     || type === 'repeat-list-number';
 };
 
-// 요소 타입에 따라 미리보기 HTML 태그(또는 칩)를 생성합니다.
 const renderElementPreviewHtml = (type: string, label: string, placeholder?: string) => {
   const safeLabel = escapeHtml(label);
   const safePlaceholder = escapeHtml(placeholder || '');
   if (isActionElementType(type)) {
-    return `<button type="button" class="element-control element-action-button">버튼</button>`;
+    return '<button type="button" class="element-control element-action-button">버튼</button>';
   }
   if (type === 'text') {
     return `<input class="element-control element-input" type="text" placeholder="${safePlaceholder}" />`;
@@ -70,9 +73,8 @@ const renderElementPreviewHtml = (type: string, label: string, placeholder?: str
   return `<span class="chip ${tone}">${safeLabel}</span>`;
 };
 
-// 현재 시트 상태로 iframe 미리보기에 사용할 독립 HTML 문서를 생성합니다.
-const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: number[]) => {
-  const tableRows = cells
+const buildSheetRowsHtml = (cells: Cell[][], colWidths: number[], rowHeights: number[]) => {
+  return cells
     .map((row, rowIndex) => {
       const rowCells = row
         .map((cell, colIndex) => {
@@ -84,7 +86,7 @@ const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: numb
           const height = rowHeights.slice(rowIndex, rowIndex + spanRows).reduce((sum, value) => sum + value, 0);
           const horizontalAlign = cell.horizontalAlign || 'left';
           const verticalAlign = cell.verticalAlign || 'middle';
-          const fontFamily = cell.fontFamily || 'Hanjin Group Sans';
+          const fontFamily = cell.fontFamily || 'Noto Sans KR';
           const fontSize = cell.fontSize || '12px';
           const fontColor = cell.fontColor || '#2f343b';
           const fontBackground = cell.fontBackground || 'transparent';
@@ -132,6 +134,22 @@ const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: numb
       return `<tr>${rowCells}</tr>`;
     })
     .join('');
+};
+
+const buildPreviewHtml = (sheets: PreviewSheetData[]) => {
+  const sectionsHtml = sheets
+    .map((sheet) => {
+      const tableRows = buildSheetRowsHtml(sheet.cells, sheet.colWidths, sheet.rowHeights);
+      return `
+      <div class="doc-wrap">
+        <table>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
+      </div>`;
+    })
+    .join('');
 
   return `<!doctype html>
 <html lang="ko">
@@ -151,11 +169,17 @@ const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: numb
       justify-content: center;
       align-items: flex-start;
     }
+    .doc-stack {
+      width: max-content;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
     .doc-wrap {
       display: inline-block;
-      border: 1px solid #cfd8e3;
+      border: none;
       background: #fff;
-      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.08);
+      box-shadow: none;
     }
     table {
       border-collapse: collapse;
@@ -257,21 +281,16 @@ const buildPreviewHtml = (cells: Cell[][], colWidths: number[], rowHeights: numb
   </style>
 </head>
 <body>
-  <div class="doc-wrap">
-    <table>
-      <tbody>
-        ${tableRows}
-      </tbody>
-    </table>
+  <div class="doc-stack">
+    ${sectionsHtml}
   </div>
 </body>
 </html>`;
 };
 
-const SheetPreview: React.FC<SheetPreviewProps> = ({ cells, colWidths, rowHeights }) => {
+const SheetPreview: React.FC<SheetPreviewProps> = ({ sheets }) => {
   const [isOpen, setIsOpen] = useState(false);
-  // 시트 데이터가 바뀔 때만 미리보기 HTML을 다시 계산합니다.
-  const htmlDocument = useMemo(() => buildPreviewHtml(cells, colWidths, rowHeights), [cells, colWidths, rowHeights]);
+  const htmlDocument = useMemo(() => buildPreviewHtml(sheets), [sheets]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -288,7 +307,7 @@ const SheetPreview: React.FC<SheetPreviewProps> = ({ cells, colWidths, rowHeight
         type="button"
         className="sheet-preview-fab"
         onClick={() => setIsOpen(true)}
-        aria-label="HTML 미리보기 열기"
+        aria-label="미리보기 열기"
       >
         미리보기
       </button>

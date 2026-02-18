@@ -6,6 +6,7 @@ import Main from './layout/Main';
 import RNB from './layout/RNB';
 import SheetPreview from './layout/SheetPreview';
 import { BorderMode, Cell, CellPosition, HeaderContextMenuState, HorizontalAlign, InspectedElement, LnbGroup, Selection, VerticalAlign } from './SpreadsheetEditor.types';
+import { createLnbCustomGroups, createLnbSelectGroups, lnbAutoGroups } from './config/lnbGroups';
 import './SpreadsheetEditor.css';
 
 const GRID_CELL_WIDTH = 1024;
@@ -38,7 +39,7 @@ const htmlToPlainText = (value: string) =>
 
 const toElementHtml = (el: NonNullable<Cell['elements']>[number]) => {
   const displayLabel = escapeHtml(el.label || el.name || '');
-  const placeholderText = escapeHtml(el.placeholder || el.label || '');
+  const placeholderText = escapeHtml(el.placeholder || '');
   const placeholderAttr = placeholderText ? ` placeholder="${placeholderText}"` : '';
   let control = `<span class="cell-native-label">${escapeHtml(el.type)}</span>`;
   if (el.type === 'text') control = `<input class="cell-native-control" type="text"${placeholderAttr} readonly tabindex="-1" />`;
@@ -126,31 +127,54 @@ const formatCurrentTimeToken = () => {
 };
 
 type LnbTabKey = '기본 설정' | '자동 입력' | '선택 입력' | '커스텀 항목';
+type MainSheet = {
+  id: string;
+  label: string;
+  cells: Cell[][];
+  rowHeights: number[];
+  colWidths: number[];
+  selection: Selection;
+  focusedCell: CellPosition;
+};
+
+const createEmptyCells = (rows: number, cols: number): Cell[][] =>
+  Array.from({ length: rows }, (_, row) =>
+    Array.from({ length: cols }, (_, col) => ({
+      id: `${row}-${col}`,
+      value: '',
+      rowSpan: 1,
+      colSpan: 1,
+      isMerged: false,
+      background: undefined,
+      richTextHtml: '',
+      elements: [],
+    }))
+  );
 
 const SpreadsheetEditor: React.FC = () => {
   // 시트 편집 상태: 셀 데이터와 레이아웃(행 높이/열 너비), 선택/편집 상태를 관리합니다.
-  const [cells, setCells] = useState<Cell[][]>(() =>
-    Array.from({ length: INITIAL_ROWS }, (_, row) =>
-      Array.from({ length: INITIAL_COLS }, (_, col) => ({
-        id: `${row}-${col}`,
-        value: '',
-        rowSpan: 1,
-        colSpan: 1,
-        isMerged: false,
-        background: undefined,
-        richTextHtml: '',
-        elements: [],
-      }))
-    )
-  );
+  const initialSheetId = 'sheet-1';
+  const [sheets, setSheets] = useState<MainSheet[]>([
+    {
+      id: initialSheetId,
+      label: '본문',
+      cells: createEmptyCells(INITIAL_ROWS, INITIAL_COLS),
+      rowHeights: Array(INITIAL_ROWS).fill(DEFAULT_ROW_HEIGHT),
+      colWidths: computeDistributedWidths(INITIAL_COLS),
+      selection: { startRow: 0, startCol: 0, endRow: 0, endCol: 0 },
+      focusedCell: { row: 0, col: 0 },
+    },
+  ]);
+  const [activeMainTab, setActiveMainTab] = useState<string>(initialSheetId);
+  const [cells, setCells] = useState<Cell[][]>(sheets[0].cells);
 
-  const [rowHeights, setRowHeights] = useState<number[]>(Array(INITIAL_ROWS).fill(DEFAULT_ROW_HEIGHT));
-  const [colWidths, setColWidths] = useState<number[]>(computeDistributedWidths(INITIAL_COLS));
+  const [rowHeights, setRowHeights] = useState<number[]>(sheets[0].rowHeights);
+  const [colWidths, setColWidths] = useState<number[]>(sheets[0].colWidths);
   const [selection, setSelection] = useState<Selection>({ startRow: 0, startCol: 0, endRow: 0, endCol: 0 });
   const [isSelecting, setIsSelecting] = useState(false);
   const [editingCell, setEditingCell] = useState<CellPosition | null>(null);
   const [editingValue, setEditingValue] = useState('');
-  const [focusedCell, setFocusedCell] = useState<CellPosition>({ row: 0, col: 0 });
+  const [focusedCell, setFocusedCell] = useState<CellPosition>(sheets[0].focusedCell);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isShortcutOpen, setIsShortcutOpen] = useState(false);
   const [isDocOpen, setIsDocOpen] = useState(false);
@@ -159,9 +183,9 @@ const SpreadsheetEditor: React.FC = () => {
   const [isTabEditModalOpen, setIsTabEditModalOpen] = useState(false);
   const [isTabDeleteConfirmOpen, setIsTabDeleteConfirmOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [activeMainTab, setActiveMainTab] = useState<'sheet'>('sheet');
-  const [mainTabLabel, setMainTabLabel] = useState('본문');
   const [mainTabLabelDraft, setMainTabLabelDraft] = useState('본문');
+  const [draggingMainTabId, setDraggingMainTabId] = useState<string | null>(null);
+  const [dragOverMainTabId, setDragOverMainTabId] = useState<string | null>(null);
   const [colorMenu, setColorMenu] = useState<{ x: number; y: number } | null>(null);
   const [headerContextMenu, setHeaderContextMenu] = useState<HeaderContextMenuState | null>(null);
   const [inspectedElement, setInspectedElement] = useState<InspectedElement | null>(null);
@@ -185,6 +209,45 @@ const SpreadsheetEditor: React.FC = () => {
   const resizeNeighborStartWidth = useRef(0);
   const isResizingRow = useRef<number | null>(null);
   const isResizingCol = useRef<number | null>(null);
+  const isHydratingSheet = useRef(false);
+  const prevActiveMainTab = useRef(activeMainTab);
+
+  useEffect(() => {
+    if (prevActiveMainTab.current === activeMainTab) return;
+    const activeSheet = sheets.find((sheet) => sheet.id === activeMainTab);
+    if (!activeSheet) return;
+    prevActiveMainTab.current = activeMainTab;
+    isHydratingSheet.current = true;
+    setCells(activeSheet.cells);
+    setRowHeights(activeSheet.rowHeights);
+    setColWidths(activeSheet.colWidths);
+    setSelection(activeSheet.selection);
+    setFocusedCell(activeSheet.focusedCell);
+    setEditingCell(null);
+    setEditingValue('');
+    setInspectedElement(null);
+    queueMicrotask(() => {
+      isHydratingSheet.current = false;
+    });
+  }, [activeMainTab, sheets]);
+
+  useEffect(() => {
+    if (isHydratingSheet.current) return;
+    setSheets((prev) =>
+      prev.map((sheet) =>
+        sheet.id === activeMainTab
+          ? {
+              ...sheet,
+              cells,
+              rowHeights,
+              colWidths,
+              selection,
+              focusedCell,
+            }
+          : sheet
+      )
+    );
+  }, [activeMainTab, cells, rowHeights, colWidths, selection, focusedCell]);
 
   const rowCount = cells.length;
   const colCount = cells[0]?.length || 0;
@@ -210,6 +273,25 @@ const SpreadsheetEditor: React.FC = () => {
     ['#e6eaed', '#e57373', '#f7b633', '#fdd663', '#d0f0a0', '#99e1d9', '#a2d2ff', '#90caf9', '#cba4f9', '#f3c4fb'],
     ['#cfd8dc', '#c62828', '#ef6c00', '#f9a825', '#7cb342', '#00acc1', '#039be5', '#3949ab', '#8e24aa', '#d81b60'],
   ];
+
+  const handleMainTabDrop = useCallback((targetTabId: string, sourceTabId?: string) => {
+    const draggingId = sourceTabId || draggingMainTabId;
+    if (!draggingId || draggingId === targetTabId) {
+      setDragOverMainTabId(null);
+      return;
+    }
+    setSheets((prev) => {
+      const fromIndex = prev.findIndex((sheet) => sheet.id === draggingId);
+      const toIndex = prev.findIndex((sheet) => sheet.id === targetTabId);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return prev;
+      const next = [...prev];
+      const [dragged] = next.splice(fromIndex, 1);
+      const insertIndex = toIndex;
+      next.splice(insertIndex, 0, dragged);
+      return next;
+    });
+    setDragOverMainTabId(null);
+  }, [draggingMainTabId]);
 
   // 브라우저 기본 컨텍스트 메뉴를 막아 편집기 UX를 유지합니다.
   const suppressContextMenu = useCallback((e: React.MouseEvent) => {
@@ -455,7 +537,6 @@ const SpreadsheetEditor: React.FC = () => {
     setIsSelecting(true);
     setSelection({ startRow: actual.row, startCol: actual.col, endRow: actual.row, endCol: actual.col });
     setFocusedCell(actual);
-    setEditingCell(null);
   }, [getActualCell]);
 
   // 드래그 중 마우스 위치에 따라 선택 범위를 확장합니다.
@@ -498,10 +579,13 @@ const SpreadsheetEditor: React.FC = () => {
     };
   }, []);
 
-  // 더블클릭한 셀을 편집 모드로 전환합니다.
+  /**
+   * 더블 클릭으로 셀 편집 모드 전환
+   */
   const handleCellDoubleClick = useCallback((row: number, col: number) => {
     const actual = getActualCell(row, col);
     const target = cells[actual.row][actual.col];
+    // debugger
     setEditingCell(actual);
     setEditingValue(target.richTextHtml || buildDefaultRichTextHtml(target));
   }, [cells, getActualCell]);
@@ -1033,40 +1117,6 @@ const SpreadsheetEditor: React.FC = () => {
     });
   }, [selection]);
 
-  // 선택 범위 각 셀에 지정한 엘리먼트를 추가합니다.
-  const addElementToSelection = useCallback((type: string, label: string) => {
-    const minRow = Math.min(selection.startRow, selection.endRow);
-    const maxRow = Math.max(selection.startRow, selection.endRow);
-    const minCol = Math.min(selection.startCol, selection.endCol);
-    const maxCol = Math.max(selection.startCol, selection.endCol);
-    setCells(prev =>
-      prev.map((row, rIdx) =>
-        row.map((cell, cIdx) => {
-          if (rIdx >= minRow && rIdx <= maxRow && cIdx >= minCol && cIdx <= maxCol) {
-            const nextElements = [...(cell.elements || [])];
-            const defaultToken = `${label}_${formatCurrentTimeToken()}`;
-            const nextElement = {
-              id: `${rIdx}-${cIdx}-${Date.now()}-${nextElements.length}`,
-              type,
-              label,
-              primaryKey: defaultToken,
-              name: defaultToken,
-              customId: '',
-              placeholder: '',
-            };
-            nextElements.push(nextElement);
-            const textHtml = plainTextToHtml(stripElementTokens(cell.value || ''));
-            const baseHtml = cell.richTextHtml || textHtml;
-            const nextHtml = baseHtml ? `${baseHtml} ${toElementHtml(nextElement)}` : toElementHtml(nextElement);
-            const parsed = parseRichEditorPayload(nextHtml, nextElements);
-            return { ...cell, elements: parsed.elements, richTextHtml: parsed.html, value: parsed.plain };
-          }
-          return cell;
-        })
-      )
-    );
-  }, [selection]);
-
 
   const handleElementClick = useCallback((e: React.MouseEvent, row: number, col: number, elementId: string) => {
     e.stopPropagation();
@@ -1237,6 +1287,16 @@ const SpreadsheetEditor: React.FC = () => {
   const minSelCol = Math.min(selection.startCol, selection.endCol);
   const maxSelCol = Math.max(selection.startCol, selection.endCol);
   const isSingleSelection = minSelRow === maxSelRow && minSelCol === maxSelCol;
+  const canMergeCells = !isSingleSelection;
+  const canUnmergeCells = useMemo(() => {
+    for (let row = minSelRow; row <= maxSelRow; row++) {
+      for (let col = minSelCol; col <= maxSelCol; col++) {
+        const cell = cells[row]?.[col];
+        if (cell?.isMerged) return true;
+      }
+    }
+    return false;
+  }, [cells, minSelRow, maxSelRow, minSelCol, maxSelCol]);
   const toColLabel = (colIndex: number) => {
     const colLetter = String.fromCharCode(65 + (colIndex % 26));
     const colNumber = Math.floor(colIndex / 26);
@@ -1245,150 +1305,61 @@ const SpreadsheetEditor: React.FC = () => {
   const selectedCell = cells[minSelRow]?.[minSelCol];
   const cellQuickMenu = {
     selectionLabel: `${minSelRow + 1}, ${toColLabel(minSelCol)}`,
+    selectionInfo: `${minSelRow + 1}행 ${minSelCol + 1}열${
+      minSelRow !== maxSelRow || minSelCol !== maxSelCol
+        ? ` - ${maxSelRow + 1}행 ${maxSelCol + 1}열`
+        : ''
+    }`,
     bold: !!selectedCell?.bold,
     italic: !!selectedCell?.italic,
     strikeThrough: !!selectedCell?.strikeThrough,
     horizontalAlign: selectedCell?.horizontalAlign || 'left',
     verticalAlign: selectedCell?.verticalAlign || 'middle',
     background: selectedCell?.background ?? '',
+    fontFamily: selectedCell?.fontFamily || 'Noto Sans KR',
     fontSize: selectedCell?.fontSize || '12px',
     fontColor: selectedCell?.fontColor || '#2f343b',
     fontBackground: selectedCell?.fontBackground || '#ffffff',
   };
-  const lnbSelectGroups: LnbGroup[] = [
-    {
-      title: '입력 항목',
-      items: [
-        { id: 'input', icon: 'T', label: '입력 박스', action: () => { addElementToSelection('text', 'IPT'); } },
-        { id: 'table', icon: '\u2263', label: '텍스트 영역', action: () => { addElementToSelection('textarea', 'TXT'); } },
-        { id: 'select', icon: '1', label: '숫자', action: () => { addElementToSelection('number', 'NUB'); } },
-      ],
-    },
-    {
-      title: '선택 항목',
-      items: [
-        { id: 'listbox', icon: '\u25BE', label: '셀렉트 박스', action: () => { addElementToSelection('select', 'SLT'); } },
-        { id: 'check', icon: '\u2611', label: '체크 박스', action: () => { addElementToSelection('checkbox', 'CHK'); } },
-        { id: 'radio', icon: '\u25C9', label: '라디오 버튼', action: () => { addElementToSelection('radio', 'RDO'); } },
-      ],
-    },
-    {
-      title: '표시 항목',
-      items: [
-        { id: 'view-label', icon: 'L', label: '라벨', action: () => { addElementToSelection('label', 'LBL'); } },
-        { id: 'view-url', icon: '\uD83D\uDD17', label: 'URL', action: () => { addElementToSelection('url', 'URL'); } },
-        { id: 'view-image', icon: '\u25A3', label: '이미지', action: () => { addElementToSelection('image', 'IMG'); } },
-      ],
-    },
-    {
-      title: '액션 항목',
-      items: [
-        { id: 'action-button', icon: '\u25A3', label: '버튼', action: () => { addElementToSelection('button', 'BTN'); } },
-        { id: 'action-user-select', icon: '\u25C9', label: '사용자선택', action: () => { addElementToSelection('user-select', 'USR'); } },
-        { id: 'action-department-select', icon: '\u25A6', label: '부서선택', action: () => { addElementToSelection('department-select', 'DPT'); } },
-        { id: 'action-file-upload', icon: '\u21E7', label: '파일업로드', action: () => { addElementToSelection('file-upload', 'FILE'); } },
-        { id: 'action-repeat-button', icon: '\u21BB', label: '반복버튼', action: () => { addElementToSelection('repeat-button', 'RPB'); } },
-        { id: 'action-repeat-list-number', icon: '\u2263', label: '반복 목록 번호', action: () => { addElementToSelection('repeat-list-number', 'RPN'); } },
-      ],
-    },
-  ];
-  const lnbAutoGroups: LnbGroup[] = [
-    {
-      title: '기안자 정보',
-      items: [
-        {
-          id: 'drafter-name',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.2" /><path d="M6 19c0-3.2 2.7-5.4 6-5.4s6 2.2 6 5.4" /></svg>,
-          label: '이름',
-        },
-        {
-          id: 'drafter-dept',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="1.6" /><line x1="9" y1="9" x2="9" y2="9.1" /><line x1="12" y1="9" x2="12" y2="9.1" /><line x1="15" y1="9" x2="15" y2="9.1" /><line x1="9" y1="12" x2="9" y2="12.1" /><line x1="12" y1="12" x2="12" y2="12.1" /><line x1="15" y1="12" x2="15" y2="12.1" /><line x1="11" y1="19" x2="11" y2="15.5" /><line x1="13" y1="19" x2="13" y2="15.5" /></svg>,
-          label: '부서명',
-        },
-        {
-          id: 'drafter-title',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="7.5" width="15" height="10.5" rx="1.8" /><path d="M9 7.5v-1a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" /><line x1="4.5" y1="11.2" x2="19.5" y2="11.2" /></svg>,
-          label: '직책',
-        },
-        {
-          id: 'drafter-empno',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5.5" width="15" height="13" rx="1.8" /><circle cx="9" cy="10" r="1.6" /><line x1="12" y1="9" x2="16.5" y2="9" /><line x1="12" y1="12" x2="16.5" y2="12" /><line x1="7.5" y1="15.2" x2="16.5" y2="15.2" /></svg>,
-          label: '사번',
-        },
-        {
-          id: 'drafter-company-phone',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7.5h10a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5H7a1.5 1.5 0 0 1-1.5-1.5V9A1.5 1.5 0 0 1 7 7.5Z" /><path d="M9.2 7.5V6.2a2.8 2.8 0 1 1 5.6 0v1.3" /><line x1="9.3" y1="11.1" x2="14.7" y2="11.1" /><line x1="9.3" y1="13.8" x2="14.7" y2="13.8" /></svg>,
-          label: '회사전화',
-        },
-        {
-          id: 'drafter-mobile-phone',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3.8" width="8" height="16.4" rx="1.8" /><line x1="10.4" y1="6.4" x2="13.6" y2="6.4" /><circle cx="12" cy="17.1" r="0.9" /></svg>,
-          label: '휴대전화',
-        },
-        {
-          id: 'drafter-fax',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4.5" width="12" height="5.5" rx="0.8" /><rect x="4.5" y="10" width="15" height="9.5" rx="1.4" /><line x1="8" y1="13.5" x2="16" y2="13.5" /><line x1="8" y1="16.2" x2="13.5" y2="16.2" /><line x1="17.2" y1="12.6" x2="17.2" y2="12.7" /></svg>,
-          label: '팩스번호',
-        },
-      ],
-    },
-    {
-      title: '회사 정보',
-      items: [
-        {
-          id: 'company-name',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5" width="15" height="14" rx="1.7" /><line x1="8.2" y1="9" x2="8.3" y2="9" /><line x1="11.2" y1="9" x2="11.3" y2="9" /><line x1="14.2" y1="9" x2="14.3" y2="9" /><line x1="8.2" y1="12.2" x2="8.3" y2="12.2" /><line x1="11.2" y1="12.2" x2="11.3" y2="12.2" /><line x1="14.2" y1="12.2" x2="14.3" y2="12.2" /><line x1="10.8" y1="19" x2="10.8" y2="15.4" /><line x1="13.2" y1="19" x2="13.2" y2="15.4" /></svg>,
-          label: '회사명',
-        },
-        {
-          id: 'company-ceo',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.1" /><path d="M6 19c0-3.2 2.7-5.3 6-5.3s6 2.1 6 5.3" /><path d="M15.7 5.6l1 1.6 1.8.4-1.2 1.4.1 1.9-1.7-.7-1.7.7.1-1.9-1.2-1.4 1.8-.4z" /></svg>,
-          label: '대표이사명',
-        },
-        {
-          id: 'company-main-phone',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.8 5.2h6.4a1.8 1.8 0 0 1 1.8 1.8v10a1.8 1.8 0 0 1-1.8 1.8H8.8A1.8 1.8 0 0 1 7 17V7a1.8 1.8 0 0 1 1.8-1.8Z" /><line x1="10.4" y1="8.3" x2="13.6" y2="8.3" /><line x1="10.4" y1="11.4" x2="13.6" y2="11.4" /><circle cx="12" cy="15.7" r="0.9" /></svg>,
-          label: '대표 전화',
-        },
-        {
-          id: 'company-address',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s5-5.2 5-9A5 5 0 1 0 7 11c0 3.8 5 9 5 9Z" /><circle cx="12" cy="11" r="1.7" /></svg>,
-          label: '회사 주소',
-        },
-      ],
-    },
-    {
-      title: '문서 정보',
-      items: [
-        {
-          id: 'doc-number',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4.8" width="14" height="14.4" rx="1.8" /><line x1="8.2" y1="9.2" x2="15.8" y2="9.2" /><line x1="8.2" y1="12.4" x2="15.8" y2="12.4" /><line x1="8.2" y1="15.6" x2="13.6" y2="15.6" /></svg>,
-          label: '문서 번호',
-        },
-        {
-          id: 'doc-registered-date',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.8" y="5.5" width="14.4" height="13.7" rx="1.6" /><line x1="4.8" y1="9.2" x2="19.2" y2="9.2" /><line x1="9" y1="3.9" x2="9" y2="7" /><line x1="15" y1="3.9" x2="15" y2="7" /><line x1="9" y1="13.2" x2="12.2" y2="13.2" /></svg>,
-          label: '등록일',
-        },
-        {
-          id: 'doc-closed-date',
-          icon: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.8" y="5.5" width="14.4" height="13.7" rx="1.6" /><line x1="4.8" y1="9.2" x2="19.2" y2="9.2" /><line x1="9" y1="3.9" x2="9" y2="7" /><line x1="15" y1="3.9" x2="15" y2="7" /><line x1="8.6" y1="14.6" x2="11.1" y2="17.1" /><line x1="11.1" y1="17.1" x2="15.2" y2="13" /></svg>,
-          label: '종결 일자',
-        },
-      ],
-    },
-  ];
+
+  // 선택 범위 각 셀에 지정한 엘리먼트를 추가합니다.
+  const addElementToSelection = useCallback((type: string, label: string) => {
+    const minRow = Math.min(selection.startRow, selection.endRow);
+    const maxRow = Math.max(selection.startRow, selection.endRow);
+    const minCol = Math.min(selection.startCol, selection.endCol);
+    const maxCol = Math.max(selection.startCol, selection.endCol);
+    setCells(prev =>
+        prev.map((row, rIdx) =>
+            row.map((cell, cIdx) => {
+              if (rIdx >= minRow && rIdx <= maxRow && cIdx >= minCol && cIdx <= maxCol) {
+                const nextElements = [...(cell.elements || [])];
+                const defaultToken = `${label}_${formatCurrentTimeToken()}`;
+                const nextElement = {
+                  id: `${rIdx}-${cIdx}-${Date.now()}-${nextElements.length}`,
+                  type,
+                  label,
+                  primaryKey: defaultToken,
+                  name: defaultToken,
+                  customId: '',
+                  placeholder: '',
+                };
+                nextElements.push(nextElement);
+                const textHtml = plainTextToHtml(stripElementTokens(cell.value || ''));
+                const baseHtml = cell.richTextHtml || textHtml;
+                const nextHtml = baseHtml ? `${baseHtml} ${toElementHtml(nextElement)}` : toElementHtml(nextElement);
+                const parsed = parseRichEditorPayload(nextHtml, nextElements);
+                return { ...cell, elements: parsed.elements, richTextHtml: parsed.html, value: parsed.plain };
+              }
+              return cell;
+            })
+        )
+    );
+  }, [selection]);
+
+  const lnbSelectGroups = useMemo(() => createLnbSelectGroups(addElementToSelection), [addElementToSelection]);
+  const lnbCustomGroups = useMemo(() => createLnbCustomGroups(addElementToSelection), [addElementToSelection]);
   const lnbBaseGroups: LnbGroup[] = [];
   const lnbChoiceGroups: LnbGroup[] = [lnbSelectGroups[0], lnbSelectGroups[1], lnbSelectGroups[2], lnbSelectGroups[3]];
-  const lnbCustomGroups: LnbGroup[] = [
-    {
-      title: 'Custom Elements',
-      items: [
-        { id: 'custom-body-html', icon: '</>', label: '본문 HTML', action: () => { addElementToSelection('body-html', 'HTML'); } },
-      ],
-    },
-  ];
   const activeLnbGroups =
     lnbTab === '기본 설정'
       ? lnbBaseGroups
@@ -1414,38 +1385,71 @@ const SpreadsheetEditor: React.FC = () => {
         mainTop={
           <div className="main-tabs-wrap">
             <div className="main-tabs">
-              <button
-                type="button"
-                className={`main-tab ${activeMainTab === 'sheet' ? 'active' : ''}`}
-                onClick={() => setActiveMainTab('sheet')}
-              >
-                <span className="main-tab-label">{mainTabLabel}</span>
-                {activeMainTab === 'sheet' && (
-                  <span className="main-tab-inline-icons">
-                    <span
-                      className="main-tab-inline-icon pen"
-                      role="button"
-                      aria-label="탭 이름 수정"
-                      title="탭 이름 수정"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMainTabLabelDraft(mainTabLabel);
-                        setIsTabEditModalOpen(true);
-                      }}
-                    />
-                    <span
-                      className="main-tab-inline-icon trash"
-                      role="button"
-                      aria-label="탭 삭제"
-                      title="탭 삭제"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setIsTabDeleteConfirmOpen(true);
-                      }}
-                    />
-                  </span>
-                )}
-              </button>
+              {sheets.map((sheet) => (
+                <div
+                  key={sheet.id}
+                  className={`main-tab ${activeMainTab === sheet.id ? 'active' : ''} ${draggingMainTabId === sheet.id ? 'dragging' : ''} ${dragOverMainTabId === sheet.id ? 'drag-over' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setActiveMainTab(sheet.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setActiveMainTab(sheet.id);
+                    }
+                  }}
+                  draggable
+                  onDragStart={(e) => {
+                    setDraggingMainTabId(sheet.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', sheet.id);
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (dragOverMainTabId !== sheet.id) setDragOverMainTabId(sheet.id);
+                  }}
+                  onDragLeave={() => {
+                    if (dragOverMainTabId === sheet.id) setDragOverMainTabId(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const sourceTabId = e.dataTransfer.getData('text/plain');
+                    handleMainTabDrop(sheet.id, sourceTabId);
+                  }}
+                  onDragEnd={() => {
+                    setDraggingMainTabId(null);
+                    setDragOverMainTabId(null);
+                  }}
+                >
+                  <span className="main-tab-label">{sheet.label}</span>
+                  {activeMainTab === sheet.id && (
+                    <span className="main-tab-inline-icons">
+                      <button
+                        type="button"
+                        className="main-tab-inline-icon pen"
+                        aria-label="탭 이름 수정"
+                        title="탭 이름 수정"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMainTabLabelDraft(sheet.label);
+                          setIsTabEditModalOpen(true);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="main-tab-inline-icon trash"
+                        aria-label="탭 삭제"
+                        title="탭 삭제"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsTabDeleteConfirmOpen(true);
+                        }}
+                      />
+                    </span>
+                  )}
+                </div>
+              ))}
               <button
                 type="button"
                 className="main-tab plus"
@@ -1453,7 +1457,10 @@ const SpreadsheetEditor: React.FC = () => {
                 aria-label="새 탭"
                 title="추가"
               >
-                +
+                <svg className="main-tab-plus-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 3.2v9.6" />
+                  <path d="M3.2 8h9.6" />
+                </svg>
               </button>
             </div>
             <div className="main-tabs-actions">
@@ -1555,11 +1562,15 @@ const SpreadsheetEditor: React.FC = () => {
         rnb={
           <RNB
             inspectedElement={inspectedElement}
+            isCellEditing={!!editingCell}
+            canMergeCells={canMergeCells}
+            canUnmergeCells={canUnmergeCells}
             cellQuickMenu={cellQuickMenu}
             onCellToggleTextStyle={toggleTextStyleToSelection}
             onCellAlign={applyAlignmentToSelection}
             onCellBackground={applyBackgroundToSelection}
             onCellBorder={applyBorderToSelection}
+            onCellFontFamily={applyFontFamilyToSelection}
             onCellFontSize={applyFontSizeToSelection}
             onCellFontColor={applyFontColorToSelection}
             onCellFontBackground={applyFontBackgroundToSelection}
@@ -1567,6 +1578,8 @@ const SpreadsheetEditor: React.FC = () => {
             onAddCol={handleAddCol}
             onDeleteRow={handleDeleteRow}
             onDeleteCol={handleDeleteCol}
+            onMergeCells={handleMergeCells}
+            onUnmergeCells={handleUnmergeCells}
             onClearSelectionContents={clearSelectionContents}
             rnbOpenSections={rnbOpenSections}
             onToggleSection={toggleRnbSection}
@@ -1581,14 +1594,59 @@ const SpreadsheetEditor: React.FC = () => {
         <div className="modal-overlay" onClick={() => setIsAddTabModalOpen(false)}>
           <div className="modal modal-square-actions" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3 className="modal-title">새 탭 추가</h3>
+              <h3 className="modal-title">폼 영역 추가</h3>
               <button className="modal-close" onClick={() => setIsAddTabModalOpen(false)} aria-label="닫기">×</button>
             </div>
             <div className="modal-body">
               <div className="square-action-grid">
-                <button type="button" className="square-action-button">본문</button>
-                <button type="button" className="square-action-button">머리말</button>
-                <button type="button" className="square-action-button">꼬리말</button>
+                <button
+                  type="button"
+                  className="square-action-button basic-form"
+                  onClick={() => {
+                    const activeIndex = sheets.findIndex((sheet) => sheet.id === activeMainTab);
+                    const insertAt = activeIndex >= 0 ? activeIndex + 1 : sheets.length;
+                    const nextNumber = sheets.length + 1;
+                    const nextId = `sheet-${Date.now()}`;
+                    const nextSheet: MainSheet = {
+                      id: nextId,
+                      label: `본문 ${nextNumber}`,
+                      cells: createEmptyCells(INITIAL_ROWS, INITIAL_COLS),
+                      rowHeights: Array(INITIAL_ROWS).fill(DEFAULT_ROW_HEIGHT),
+                      colWidths: computeDistributedWidths(INITIAL_COLS),
+                      selection: { startRow: 0, startCol: 0, endRow: 0, endCol: 0 },
+                      focusedCell: { row: 0, col: 0 },
+                    };
+                    setSheets((prev) => [...prev.slice(0, insertAt), nextSheet, ...prev.slice(insertAt)]);
+                    setActiveMainTab(nextId);
+                    setIsAddTabModalOpen(false);
+                  }}
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <rect x="3.5" y="2.5" width="13" height="15" rx="2" />
+                    <line x1="6.2" y1="7" x2="13.8" y2="7" />
+                    <line x1="6.2" y1="10.1" x2="13.8" y2="10.1" />
+                    <line x1="6.2" y1="13.2" x2="11.8" y2="13.2" />
+                  </svg>
+                  <span>기본 양식</span>
+                </button>
+                <button type="button" className="square-action-button google-doc" onClick={() => window.alert('준비 중')}>
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M6.2 2.8h6.6l3 3v9.7a2 2 0 0 1-2 2H6.2a2 2 0 0 1-2-2V4.8a2 2 0 0 1 2-2z" />
+                    <path d="M12.8 2.8v3h3" />
+                    <line x1="7.2" y1="9.1" x2="12.8" y2="9.1" />
+                    <line x1="7.2" y1="12" x2="12.8" y2="12" />
+                  </svg>
+                  <span>구글 문서</span>
+                </button>
+                <button type="button" className="square-action-button text-editor" onClick={() => window.alert('준비 중')}>
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <rect x="2.8" y="3.2" width="14.4" height="13.6" rx="2.2" />
+                    <line x1="6.2" y1="7" x2="13.8" y2="7" />
+                    <line x1="6.2" y1="10.1" x2="12.2" y2="10.1" />
+                    <path d="M11.1 13.9l3.3-3.3 1.6 1.6-3.3 3.3-2.1.5z" />
+                  </svg>
+                  <span>텍스트 에디터</span>
+                </button>
               </div>
             </div>
           </div>
@@ -1614,7 +1672,13 @@ const SpreadsheetEditor: React.FC = () => {
                   type="button"
                   className="main-tab-modal-button primary"
                   onClick={() => {
-                    setMainTabLabel(mainTabLabelDraft.trim() || '본문');
+                    setSheets((prev) =>
+                      prev.map((sheet) =>
+                        sheet.id === activeMainTab
+                          ? { ...sheet, label: mainTabLabelDraft.trim() || '본문' }
+                          : sheet
+                      )
+                    );
                     setIsTabEditModalOpen(false);
                   }}
                 >
@@ -1645,7 +1709,19 @@ const SpreadsheetEditor: React.FC = () => {
                 <button
                   type="button"
                   className="main-tab-modal-button danger"
-                  onClick={() => setIsTabDeleteConfirmOpen(false)}
+                  onClick={() => {
+                    if (sheets.length <= 1) {
+                      window.alert('최소 1개의 탭은 필요합니다.');
+                      setIsTabDeleteConfirmOpen(false);
+                      return;
+                    }
+                    const activeIndex = sheets.findIndex((sheet) => sheet.id === activeMainTab);
+                    const remaining = sheets.filter((sheet) => sheet.id !== activeMainTab);
+                    setSheets(remaining);
+                    const nextActiveIndex = Math.max(0, activeIndex - 1);
+                    setActiveMainTab(remaining[nextActiveIndex].id);
+                    setIsTabDeleteConfirmOpen(false);
+                  }}
                 >
                   삭제
                 </button>
@@ -1661,7 +1737,15 @@ const SpreadsheetEditor: React.FC = () => {
           </div>
         </div>
       )}
-      <SheetPreview cells={cells} colWidths={colWidths} rowHeights={rowHeights} />
+      <SheetPreview
+        sheets={sheets.map((sheet) => ({
+          id: sheet.id,
+          label: sheet.label,
+          cells: sheet.cells,
+          colWidths: sheet.colWidths,
+          rowHeights: sheet.rowHeights,
+        }))}
+      />
     </>
   );
 };

@@ -139,6 +139,7 @@ const Main: React.FC<MainProps> = ({
   const fontBgInputRef = React.useRef<HTMLInputElement | null>(null);
   const activeEditorRef = React.useRef<HTMLDivElement | null>(null);
   const savedRangeRef = React.useRef<Range | null>(null);
+  const skipBlurCommitRef = React.useRef(false);
 
   React.useEffect(() => {
     if (!editingCell) return;
@@ -532,7 +533,7 @@ const Main: React.FC<MainProps> = ({
                     const edgeRight = isSelected && colIndex === maxSelCol;
                     const horizontalAlign = cell.horizontalAlign || 'left';
                     const verticalAlign = cell.verticalAlign || 'middle';
-                    const fontFamily = cell.fontFamily || 'Hanjin Group Sans';
+                    const fontFamily = cell.fontFamily || 'Noto Sans KR';
                     const fontSize = cell.fontSize || '12px';
                     const fontColor = cell.fontColor || '#2f343b';
                     const fontBackground = cell.fontBackground;
@@ -547,35 +548,35 @@ const Main: React.FC<MainProps> = ({
                     const hasCustomBorder = Boolean(
                       cellBorder.top || cellBorder.right || cellBorder.bottom || cellBorder.left
                     );
-                    const edgeShadows: string[] = [];
-                    if (edgeTop) edgeShadows.push('inset 0 2px 0 #1a73e8');
-                    if (edgeBottom) edgeShadows.push('inset 0 -2px 0 #1a73e8');
-                    if (edgeLeft) edgeShadows.push('inset 2px 0 0 #1a73e8');
-                    if (edgeRight) edgeShadows.push('inset -2px 0 0 #1a73e8');
-                    const edgeShadow = edgeShadows.join(', ');
                     return (
                       <td
                         key={cell.id}
-                        className={
-                          `spreadsheet-cell ` +
-                          `${isSelected ? 'selected' : ''} ` +
-                          `${isFocused && isSingleSelection ? 'focused' : ''} ` +
-                          `${cell.isMerged ? 'merged' : ''}`
-                        }
+                        className={[
+                          'spreadsheet-cell',
+                          isSelected ? 'selected' : '',
+                          isFocused && isSingleSelection ? 'focused' : '',
+                          cell.isMerged ? 'merged' : '',
+                          edgeTop ? 'selection-edge-top' : '',
+                          edgeBottom ? 'selection-edge-bottom' : '',
+                          edgeLeft ? 'selection-edge-left' : '',
+                          edgeRight ? 'selection-edge-right' : '',
+                          cellBorder.top ? 'cell-border-top' : '',
+                          cellBorder.right ? 'cell-border-right' : '',
+                          cellBorder.bottom ? 'cell-border-bottom' : '',
+                          cellBorder.left ? 'cell-border-left' : '',
+                        ].filter(Boolean).join(' ')}
                         rowSpan={cell.rowSpan}
                         colSpan={cell.colSpan}
                         style={{
                           backgroundColor: cell.background,
-                          borderTop: cellBorder.top ? '1px solid #000000' : undefined,
-                          borderLeft: cellBorder.left ? '1px solid #000000' : undefined,
-                          borderRight: cellBorder.right ? '1px solid #000000' : '1px solid #e0e0e0',
-                          borderBottom: cellBorder.bottom ? '1px solid #000000' : '1px solid #e0e0e0',
-                          boxShadow: edgeShadow || undefined,
                           height: rowHeights[rowIndex],
                           maxHeight: rowHeights[rowIndex],
                         }}
                         onMouseDown={(e) => {
                           if (isEditing) return;
+                          if (editingCell && (editingCell.row !== rowIndex || editingCell.col !== colIndex)) {
+                            onCellEditComplete();
+                          }
                           const elementId = resolveElementIdFromTarget(e.target);
                           if (elementId) return;
                           onCellMouseDown(e, rowIndex, colIndex);
@@ -608,12 +609,13 @@ const Main: React.FC<MainProps> = ({
                             }}
                             onInput={(e) => onEditingValueChange(e.currentTarget.innerHTML)}
                             onBlur={() => {
-                              requestAnimationFrame(() => {
-                                const target = document.activeElement as HTMLElement | null;
-                                if (target?.closest('.rnb-panel')) return;
+                              if (skipBlurCommitRef.current) {
+                                skipBlurCommitRef.current = false;
                                 activeEditorRef.current = null;
-                                onCellEditComplete();
-                              });
+                                return;
+                              }
+                              activeEditorRef.current = null;
+                              onCellEditComplete();
                             }}
                             onFocus={(e) => {
                               activeEditorRef.current = e.currentTarget;
@@ -626,6 +628,7 @@ const Main: React.FC<MainProps> = ({
                               } else if (e.key === 'Escape') {
                                 e.preventDefault();
                                 e.stopPropagation();
+                                skipBlurCommitRef.current = true;
                                 onEditingCancel();
                               }
                             }}
@@ -662,30 +665,42 @@ const Main: React.FC<MainProps> = ({
                                 : { textAlign: horizontalAlign, fontFamily, fontSize, color: fontColor, fontWeight, fontStyle, textDecoration }
                             }
                           />
-                        ) : (
-                          <div
-                            className="cell-content"
+                        ) : cell.richTextHtml ? (
+                          <span
+                            className="cell-text"
                             style={{
                               alignItems: contentAlignItems,
                               justifyContent: contentJustifyContent,
                               textAlign: horizontalAlign,
                               fontFamily,
                               fontSize,
+                              color: fontColor,
+                              backgroundColor: fontBackground,
+                              fontWeight,
+                              fontStyle,
+                              textDecoration,
+                            }}
+                            dangerouslySetInnerHTML={{ __html: cell.richTextHtml }}
+                          />
+                        ) : (cell.value || '').trim() ? (
+                          <span
+                            className="cell-text"
+                            style={{
+                              alignItems: contentAlignItems,
+                              justifyContent: contentJustifyContent,
+                              textAlign: horizontalAlign,
+                              fontFamily,
+                              fontSize,
+                              color: fontColor,
+                              backgroundColor: fontBackground,
+                              fontWeight,
+                              fontStyle,
+                              textDecoration,
                             }}
                           >
-                            {cell.richTextHtml ? (
-                              <span
-                                className="cell-text"
-                                style={{ color: fontColor, backgroundColor: fontBackground, fontWeight, fontStyle, textDecoration }}
-                                dangerouslySetInnerHTML={{ __html: cell.richTextHtml }}
-                              />
-                            ) : (cell.value || '').trim() ? (
-                              <span className="cell-text" style={{ color: fontColor, backgroundColor: fontBackground, fontWeight, fontStyle, textDecoration }}>
-                                {(cell.value || '').trim()}
-                              </span>
-                            ) : null}
-                          </div>
-                        )}
+                            {(cell.value || '').trim()}
+                          </span>
+                        ) : null}
                       </td>
                     );
                   })}
@@ -694,17 +709,7 @@ const Main: React.FC<MainProps> = ({
             </tbody>
           </table>
         </div>
-        <div className="editor-status-bar">
-          <div className="editor-status-pill">
-            <span className="editor-status-title">선택 셀</span>
-            <span className="editor-status-value">
-              {Math.min(selection.startRow, selection.endRow) + 1}행 {Math.min(selection.startCol, selection.endCol) + 1}열
-              {selection.startRow !== selection.endRow || selection.startCol !== selection.endCol
-                ? ` - ${Math.max(selection.startRow, selection.endRow) + 1}행 ${Math.max(selection.startCol, selection.endCol) + 1}열`
-                : ''}
-            </span>
-          </div>
-        </div>
+        <div className="editor-status-bar" aria-hidden="true"></div>
       </div>
 
       {colorMenu && (
